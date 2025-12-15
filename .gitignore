@@ -1,0 +1,47 @@
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.bat
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+libraries/**/*.html
+utilities/**/*.txt
+# Debug files
+Debug/
+out/
+project/settings/
+project/*.icf
+*.dep
+*.ewd
+*.ewt
+
+# makefsdata.exe
+sources/httpd/msvcr100d.dll
+sources/httpd/makefsdata.exe
+sources/httpd/makefs.bat
+sources/httpd/1.txt
