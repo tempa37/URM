@@ -1,30 +1,28 @@
-"--endian=little" 
+--endian=little
 
-"--cpu=Cortex-M0" 
+--cpu=Cortex-M0
 
-"--fpu=None" 
+--fpu=None
 
-"-p" 
+-p
 
-"C:\Program Files (x86)\IAR Systems\Embedded Workbench 8.3\arm\CONFIG\debugger\ST\STM32F030K6.ddf" 
+C:\iar\ewarm-9.70.1\arm\config\debugger\ST\STM32F030K6.ddf
 
-"--drv_verify_download" 
+--semihosting
 
-"--semihosting" 
+--device=STM32F030K6
 
-"--device=STM32F030K6" 
+--drv_communication=USB0
 
-"--drv_interface=SWD" 
+--drv_interface_speed=auto
 
-"--stlink_reset_strategy=0,2" 
+--jlink_initial_speed=1000
 
-"--drv_swo_clock_setup=25000000,0,2000000" 
+--jlink_reset_strategy=0,0
 
-"--drv_catch_exceptions=0x000" 
+--drv_interface=SWD
 
-"--drv_debug_ap=0" 
-
-"--stlink_probe=stlinkv2" 
+--drv_catch_exceptions=0x000
 
 
 
