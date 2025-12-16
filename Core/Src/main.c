@@ -103,6 +103,7 @@ void shoot(uint8_t shift, uint8_t meaning);
 void BDU_pin_activate(uint8_t number, uint8_t on_off);
 void zeroing_the_buffer(void);
 uint8_t ID_parsing(void);
+void UART1_FullRestartRx(void);
 //uint8_t change_i2c(void);
 /* USER CODE END PFP */
 
@@ -110,14 +111,16 @@ uint8_t ID_parsing(void);
 /* USER CODE BEGIN 0 */
 
 uint32_t gSwitchToReceiveCount = 0;
+
 void SwitchToReceive() {
-  ++gSwitchToReceiveCount;
-  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
-  __HAL_UART_CLEAR_OREFLAG(&huart1);
-  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
-  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT);
+++gSwitchToReceiveCount;
+__HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
+__HAL_UART_CLEAR_OREFLAG(&huart1);
+__HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
+__HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
+HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
+__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+
 }
 
 uint8_t ID_parsing(void)
@@ -127,6 +130,7 @@ uint8_t ID_parsing(void)
         (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) << 2);
   return ID_1;
 }
+
 void zeroing_the_buffer(void)
 {
   memset(receive_buf, 0, 11);
@@ -441,6 +445,9 @@ void double_DO()
           }
   }
   
+  state = receive_buf[8];
+  
+  /*
   if (receive_buf[8] & 0x01){
         state = 0x01;
         }
@@ -489,9 +496,13 @@ void double_DO()
         else{
         state = state + (0 << 0x07);
         }
+  
+  */
+  
   if (state != 0xff) {
     gInp = receive_buf[7];
   }
+  
   HAL_I2C_Master_Transmit(&hi2c1, I2C_DEV_ADDR, &state, 1, 10);
 
 while(cntr<400){
@@ -909,6 +920,77 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+
+void UART1_FullRestartRx(void)
+{
+  // 1) Защититься от гонок с IRQ UART/DMA
+  __disable_irq();
+  HAL_NVIC_DisableIRQ(USART1_IRQn);
+  HAL_NVIC_DisableIRQ(DMA1_Channel2_3_IRQn);   // подправь под свой IRQ DMA
+
+  // 2) Остановить текущие операции UART/DMA
+  // Abort всех направлений на всякий случай (если в момент рестарта идёт ответ)
+  (void)HAL_UART_Abort(&huart1);
+
+  // Остановить DMA-запросы со стороны UART
+  (void)HAL_UART_DMAStop(&huart1);
+
+  // Дополнительно прибить сами DMA-каналы (важно, если указатель DMA "уехал")
+  if (huart1.hdmarx) (void)HAL_DMA_Abort(huart1.hdmarx);
+  if (huart1.hdmatx) (void)HAL_DMA_Abort(huart1.hdmatx);
+
+  // 3) Вычистить флаги ошибок/IDLE и опустошить RDR (хвост мусора)
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
+
+  // На многих STM32 чтение RDR помогает гарантированно убрать "залипшие" байты
+  volatile uint32_t tmp;
+#if defined(USART_RDR_RDR)
+  tmp = huart1.Instance->RDR;
+#elif defined(USART_DR_DR)
+  tmp = huart1.Instance->DR;
+#else
+  tmp = huart1.Instance->RDR; // если попадёшь на другую серию — поправишь по заголовкам
+#endif
+  (void)tmp;
+
+  // 4) Сбросить сам USART в состояние "как после ресета"
+  // Такой подход прямо рекомендуют: FORCE_RESET/RELEASE_RESET перед реинициализацией. [web:9]
+  __HAL_RCC_USART1_FORCE_RESET();
+  __HAL_RCC_USART1_RELEASE_RESET();
+
+  // 5) Полная переинициализация UART (включая RS485 DE)
+  (void)HAL_UART_DeInit(&huart1);
+  MX_USART1_UART_Init();
+
+  // (Опционально) на некоторых сериях есть "DMA Disable on Reception Error" (DDRE):
+  // если включено — при ошибке приёма DMA может отключаться.
+#if defined(USART_CR3_DDRE)
+  CLEAR_BIT(huart1.Instance->CR3, USART_CR3_DDRE);
+#endif
+
+  // 6) Очистить буфер и снова запустить ReceiveToIdle DMA
+  memset(receive_buf, 0, sizeof(receive_buf));
+
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
+
+  (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
+  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+
+  // 7) Вернуть IRQ обратно
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
+  FLAG_OK = true;
+  __enable_irq();
+}
+
+
+
 void SetOsAddr(int8_t iAddr) {
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4 , (iAddr & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3 , (iAddr & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -927,8 +1009,7 @@ void SetOsAddr(int8_t iAddr) {
 void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN 5 */
-  //HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5, GPIO_PIN_SET);
-  //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
+
   bool cIsError = false;
   /* Infinite loop */
   for(;;)
@@ -954,29 +1035,16 @@ void StartDefaultTask(void const * argument)
     if (global_error != 0) {
       cIsError = true;
       CheckTumblerSetting();
-//      osDelay(10);
     } else if (cIsError) {
       cIsError = false;
-//      CheckTumblerSetting();
-//      osDelay(10);
+
     }
-//    receive_buf[0] = 0;
-//    receive_buf[1] = 0;
-//    receive_buf[2] = 0;
-//    receive_buf[3] = 0;
-//    receive_buf[4] = 0;
-//    receive_buf[5] = 0;
-//    receive_buf[6] = 0;
-//    receive_buf[7] = 0;
-//    receive_buf[8] = 0;
-//    receive_buf[9] = 0;
-//    receive_buf[10] = 0;
-//    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//    __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
+
  
     if(FLAG_OK != true){
       for(int i = 0; i<500; i++){};
       HAL_UART_AbortReceive(&huart1);
+      UART1_FullRestartRx();
       zeroing_the_buffer();
     }
     
@@ -998,6 +1066,7 @@ TickType_t gLastTickCount;
 void StartTask02(void const * argument)
 {
   /* USER CODE BEGIN StartTask02 */
+  TickType_t cLastCheckTime = 0;
   /* Infinite loop */
   for(;;)
   {
@@ -1012,18 +1081,12 @@ void StartTask02(void const * argument)
         ++gErrorCount;
       }
     }
-  /*  investigator = investigator + (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) << 0x00);
-    investigator = investigator + (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) << 0x01);
-    investigator = investigator + (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) << 0x02);
-    if (investigator > 0x07){
-    investigator = 0x00;
+
+    if ((cTickCount - cLastCheckTime) >= 3000) {
+      cLastCheckTime = cTickCount;
+      //CheckTumblerSetting();
     }
-    HAL_I2C_Master_Receive(&hi2c1, I2C_DEV_ADDR, &readout, 1, 10);
-    a = readout & (investigator - 1);
-    b = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8);
-    if(a != b){
-      osDelay(1);
-    }*/
+    
     osDelay(2);
     HAL_IWDG_Refresh(&hiwdg);
   }
