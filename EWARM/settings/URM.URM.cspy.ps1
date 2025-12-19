@@ -23,9 +23,9 @@
 
 if ($debugfile -eq "")
 {
-& "C:\iar\ewarm-9.70.1\common\bin\cspybat" -f "C:\Users\User\Desktop\RM\EWARM\settings\URM.URM.general.xcl" --backend -f "C:\Users\User\Desktop\RM\EWARM\settings\URM.URM.driver.xcl" 
+& "C:\iar\ewarm-9.70.1\common\bin\cspybat" -f "C:\Users\User\Desktop\project RM\RM\EWARM\settings\URM.URM.general.xcl" --backend -f "C:\Users\User\Desktop\project RM\RM\EWARM\settings\URM.URM.driver.xcl" 
 }
 else
 {
-& "C:\iar\ewarm-9.70.1\common\bin\cspybat" -f "C:\Users\User\Desktop\RM\EWARM\settings\URM.URM.general.xcl" --debug_file=$debugfile --backend -f "C:\Users\User\Desktop\RM\EWARM\settings\URM.URM.driver.xcl" 
+& "C:\iar\ewarm-9.70.1\common\bin\cspybat" -f "C:\Users\User\Desktop\project RM\RM\EWARM\settings\URM.URM.general.xcl" --debug_file=$debugfile --backend -f "C:\Users\User\Desktop\project RM\RM\EWARM\settings\URM.URM.driver.xcl" 
 }

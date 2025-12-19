@@ -36,7 +36,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define buf_size_rx             11
-#define buf_size_tx             10
+#define buf_size_tx             14
 //#define ID                      0x01
 #define MODBUS_ILLEGAL_FUNCTION 0x01
 #define ILLEGAL_DATA_ADDRESS    0x02
@@ -75,6 +75,25 @@ uint8_t readout = 0;
 extern bool FLAG_OK = true;
 uint8_t gID = 0;
 uint32_t cntr = 0;
+
+
+#define FLASH_PAGE_SIZE_F030   0x400u 
+#define FLASH_CFG_PAGE_ADDR    0x08007C00u //разрешаем запись только с этого адреса и далее
+#define UPDATE_FLAG            0x08007C04u
+#define UPDATE_FLAG2           0x08007C08u
+
+
+#define MODBUS_TIMEOUT_ADDRESS     0x08007C00
+#define MODBUS_TIMEOUT_MAX   1000u
+
+#define FLASH_BACKUP_LEN 100u //при перезаписи флага копируем в буффер первые 100 байт
+
+volatile uint16_t modbus_timeout = 20;
+volatile uint16_t new_paket = 0;
+
+volatile uint8_t gCrcErrCnt = 0;
+#define VECTORS_SRAM_BASE   (0x20000000UL)
+#pragma section = ".intvec"   // IAR: даёт доступ к началу/концу секции
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -104,13 +123,51 @@ void BDU_pin_activate(uint8_t number, uint8_t on_off);
 void zeroing_the_buffer(void);
 uint8_t ID_parsing(void);
 void UART1_FullRestartRx(void);
+void func_06(void);
 //uint8_t change_i2c(void);
+
+
+HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value);
+HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 uint32_t gSwitchToReceiveCount = 0;
+
+
+static void VectorTable_CopyToSRAM_AndRemap(void)
+{
+    uint32_t *src = (uint32_t *)__section_begin(".intvec");
+    uint32_t *end = (uint32_t *)__section_end(".intvec");
+    uint32_t words = (uint32_t)(end - src);
+
+    uint32_t *dst = (uint32_t *)VECTORS_SRAM_BASE;
+
+    __disable_irq();
+
+    for (uint32_t i = 0; i < words; i++) {
+        dst[i] = src[i];
+    }
+
+    __DSB();
+    __ISB();
+
+    /* Enable SYSCFG clock */
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    /* Remap SRAM at 0x00000000: MEM_MODE = 0b11 */
+    SYSCFG->CFGR1 = (SYSCFG->CFGR1 & ~SYSCFG_CFGR1_MEM_MODE) |
+                    (SYSCFG_CFGR1_MEM_MODE_0 | SYSCFG_CFGR1_MEM_MODE_1);
+
+    __DSB();
+    __ISB();
+
+    __enable_irq();
+}
+
+
 
 void SwitchToReceive() {
 ++gSwitchToReceiveCount;
@@ -163,26 +220,10 @@ extern TickType_t gLastTickCount;
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-  if  (huart -> Instance  ==  USART1){ 
-      if(receive_buf[0] == gID){
-        switch (receive_buf[1]){
-             case 0x03:                                                         //read Digital output
-               gLastTickCount = xTaskGetTickCount();
-              RDO_command_1(receive_buf[1]);                            
-              break;
-             case 0x0F:                                                         //write Multiple Digital outputs
-               gLastTickCount = xTaskGetTickCount();
-              WMDO_command_15(receive_buf[1]);                            
-              break;
-             default:                                                           //errors handler
-              ERROR_handler(MODBUS_ILLEGAL_FUNCTION);                           //MODBUS ILLEGAL FUNCTION//
-              break;
-         }       
-       }
-      else{ 
-        ERROR_checksum_handler();
-      }
-      }
+  if  (huart -> Instance  ==  USART1)
+  { 
+    new_paket = 1;
+  }
 }
 
 //Handler of command 0x01
@@ -228,9 +269,24 @@ void WMDO_command_15(uint8_t command_num)
 //When a checksum error occurs, the slave device is silent in response
 void ERROR_checksum_handler()
 {
-  SwitchToReceive();
-//    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//    __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
+  // при CRC ошибке slave молчит; но если ошибок много — перезапускаем приём
+  if (++gCrcErrCnt >= 10u)
+  {
+    gCrcErrCnt = 0u;
+
+    // на всякий случай прибить текущий "пакет"
+    new_paket = 0u;
+
+    // полный рестарт UART+DMA+флагов и повторный запуск ReceiveToIdle
+    UART1_FullRestartRx();
+
+    // UART1_FullRestartRx() уже делает memset(receive_buf,0) и стартует RX,
+    // поэтому тут дополнительно SwitchToReceive() обычно не нужен
+  }
+  else
+  {
+    SwitchToReceive();
+  }
 }
 
 //This function handles the error by taking its number
@@ -261,37 +317,97 @@ void reading_DO()
 {
     uint16_t checksum = 0;
     
-    if (receive_buf[5] > 0x02){
-      ERROR_handler(ILLEGAL_DATA_VALUE);  //ILLEGAL DATA VALUE 
-    }
+    if (receive_buf[5] > 0x03)
+      {
+        ERROR_handler(ILLEGAL_DATA_VALUE);  //ILLEGAL DATA VALUE 
+      }
   
     //check_addr();
     int cCrcIdx = 5;
-    if (receive_buf[5] == 0x02) {
-      cCrcIdx = 7;
-    }
+    if (receive_buf[5] == 0x02) 
+      {
+        cCrcIdx = 7;
+      }
     transmit_buf[0] = gID;
     transmit_buf[1] = receive_buf[1];
     transmit_buf[2] = 0x02 * receive_buf[5];
-    transmit_buf[3] = gOsBuff; //��������� �� ����
+    transmit_buf[3] = gOsBuff; 
     transmit_buf[4] = global_error;
-    if (receive_buf[5] == 0x02) {
-      transmit_buf[5] = gTumblerBuff; //��������� ���������
-      transmit_buf[6] = state;
-    }
+    if (receive_buf[5] >= 0x02)  
+      {
+        transmit_buf[5] = gTumblerBuff; 
+        transmit_buf[6] = state;
+      }
+    if (receive_buf[5] == 0x03)  
+      {
+        transmit_buf[7] = (uint8_t)(modbus_timeout >> 8);   
+        transmit_buf[8] = (uint8_t)(modbus_timeout & 0xFF); // Lo
+        cCrcIdx = 9;
+      }
     checksum = mbcrc(transmit_buf, cCrcIdx);                    //make CRC data
     transmit_buf[cCrcIdx] = (uint8_t) ((checksum >> 8) & 0xFF); //write CRC Hi byte
     transmit_buf[cCrcIdx + 1] = (uint8_t) (checksum & 0xFF);    //write CRC Lo byte
-    while(cntr<600){
-    cntr++;
-    }
+    while(cntr<600)
+      {
+        cntr++;
+      }
     cntr=0;
     HAL_UART_Transmit(&huart1, transmit_buf,  cCrcIdx + 2, 10);
     
-    SwitchToReceive();
-//    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//    __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
+    SwitchToReceive(); 
 }
+
+void func_06(void)
+{
+  
+  uint16_t crc = mbcrc(receive_buf, 6);
+
+  // CRC check (в твоём проекте CRC кладётся как Hi затем Lo)
+  if ((receive_buf[6] != (uint8_t)((crc >> 8) & 0xFF)) ||
+      (receive_buf[7] != (uint8_t)(crc & 0xFF)))
+  {
+    ERROR_checksum_handler();   // по Modbus: при CRC ошибке slave молчит
+    return;
+  }
+
+  uint16_t regAddr  = (uint16_t)((receive_buf[2] << 8) | receive_buf[3]);
+  uint16_t regValue = (uint16_t)((receive_buf[4] << 8) | receive_buf[5]);
+
+  // принимаем только "регистр 3"
+  if (regAddr != 0x02)
+  {
+    ERROR_handler(ILLEGAL_DATA_ADDRESS);
+    return;
+  }
+
+  // (опционально) валидация значения
+  if ((regValue > MODBUS_TIMEOUT_MAX))
+  {
+    ERROR_handler(ILLEGAL_DATA_VALUE);
+    return;
+  }
+
+  // запись значения
+  modbus_timeout = regValue;
+  Flash_WriteU16_Preserve100(MODBUS_TIMEOUT_ADDRESS, modbus_timeout);
+
+  // ответ — эхо запроса
+  transmit_buf[0] = gID;              // можно receive_buf[0], но gID логичнее
+  transmit_buf[1] = 0x06;
+  transmit_buf[2] = receive_buf[2];
+  transmit_buf[3] = receive_buf[3];
+  transmit_buf[4] = receive_buf[4];
+  transmit_buf[5] = receive_buf[5];
+
+  crc = mbcrc(transmit_buf, 6);
+  transmit_buf[6] = (uint8_t)((crc >> 8) & 0xFF);
+  transmit_buf[7] = (uint8_t)(crc & 0xFF);
+
+  HAL_UART_Transmit(&huart1, transmit_buf, 8, 10);
+  SwitchToReceive();
+  
+}
+
 
 bool gReset = false;
 bool gCheckingTumbler = false;
@@ -393,6 +509,17 @@ void double_DO()
   }
   FLAG_OK = true;
   
+  
+    state = receive_buf[8];
+  
+    if (state != 0xff) {
+    gInp = receive_buf[7];
+  }
+  
+  HAL_I2C_Master_Transmit(&hi2c1, I2C_DEV_ADDR, &state, 1, 10);
+  
+  
+  
   gInp = receive_buf[7];
   if ((!gReset) && (!gCheckingTumbler)) {
     if (receive_buf[7] & 0x01){
@@ -445,7 +572,7 @@ void double_DO()
           }
   }
   
-  state = receive_buf[8];
+
   
   /*
   if (receive_buf[8] & 0x01){
@@ -499,16 +626,9 @@ void double_DO()
   
   */
   
-  if (state != 0xff) {
-    gInp = receive_buf[7];
-  }
-  
-  HAL_I2C_Master_Transmit(&hi2c1, I2C_DEV_ADDR, &state, 1, 10);
 
-while(cntr<400){
-cntr++;
-}
-cntr=0;
+
+
   transmit_buf[0] = gID;
   transmit_buf[1] = receive_buf[1];
   transmit_buf[2] = receive_buf[2];
@@ -602,6 +722,9 @@ void CheckTumblerSetting() {
   gCheckingTumbler = false;
   gReset = false;
 }
+
+
+
 /* USER CODE END 0 */
 
 /**
@@ -612,7 +735,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  VectorTable_CopyToSRAM_AndRemap();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -650,6 +773,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
+  Flash_ReadU16(FLASH_CFG_PAGE_ADDR, (uint16_t*)&modbus_timeout);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -658,6 +782,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
+
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
@@ -986,6 +1111,110 @@ void UART1_FullRestartRx(void)
 }
 
 
+HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out)
+{
+  if (out == NULL) return HAL_ERROR;
+  if ((addr & 0x1u) != 0u) return HAL_ERROR;          // halfword alignment
+
+  uint16_t v = *(volatile const uint16_t*)addr;       // memory-mapped чтение
+  if (v == 0xFFFFu) {                                 // стёртая флеш обычно читается как 0xFFFF [web:21]
+    v = 10u;
+  }
+  *out = v;
+  return HAL_OK;
+}
+
+
+
+HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
+{
+  if ((addr & 0x1u) != 0u) return HAL_ERROR; // halfword alignment
+
+  // Если реально используешь только страницу 0x08007C00 — лучше так отсеять ошибочные адреса
+  if ((addr < FLASH_CFG_PAGE_ADDR) || (addr >= (FLASH_CFG_PAGE_ADDR + FLASH_PAGE_SIZE_F030)))
+    return HAL_ERROR;
+
+  // Для F030: страница 1 KB
+  uint32_t page_start = addr & ~(FLASH_PAGE_SIZE_F030 - 1u);
+  uint32_t off        = addr - page_start;
+
+  // По ТЗ сохраняем/перезаписываем только первые 100 байт страницы
+  if ((off + 2u) > FLASH_BACKUP_LEN) return HAL_ERROR;
+
+  uint8_t buf[FLASH_BACKUP_LEN];
+  memcpy(buf, (const void*)page_start, FLASH_BACKUP_LEN);
+
+  // Записали новое значение в копию первых 100 байт (little-endian)
+  buf[off + 0u] = (uint8_t)(value & 0xFFu);
+  buf[off + 1u] = (uint8_t)((value >> 8) & 0xFFu);
+
+  HAL_StatusTypeDef st;
+  uint32_t page_error = 0;
+
+  HAL_FLASH_Unlock();
+
+  FLASH_EraseInitTypeDef erase = {0};
+  erase.TypeErase   = FLASH_TYPEERASE_PAGES;     // постраничное стирание [web:4]
+  erase.PageAddress = page_start;                // адрес начала страницы [web:4]
+  erase.NbPages     = 1;                         // одна страница [web:4]
+
+  st = HAL_FLASHEx_Erase(&erase, &page_error);
+  if (st != HAL_OK) {
+    HAL_FLASH_Lock();
+    return st;
+  }
+
+  // Восстановить первые 100 байт halfword’ами (16 бит) [web:14]
+  for (uint32_t i = 0; i < FLASH_BACKUP_LEN; i += 2u) {
+    uint16_t hw = (uint16_t)(buf[i] | ((uint16_t)buf[i + 1u] << 8));
+    st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, page_start + i, hw); 
+    if (st != HAL_OK) break;
+  }
+
+  HAL_FLASH_Lock();
+  return st;
+}
+
+
+/*
+ * OS_update
+ * ---------
+ * Помечает во флеше необходимость обновления прошивки и инициирует
+ * программный перезапуск контроллера.
+ */
+void OS_update(void)
+{
+    //  Отправляем Modbus ответ об успешном выполнении функции 0x2B
+    uint8_t resp[5] = {0};
+    uint16_t crc;
+    resp[0] = gID;       // Slave address
+    resp[1] = 0x2B;       // Echo function code
+    crc     = mbcrc(resp, 2);
+    resp[2] = 0x00;
+    resp[3] = (uint8_t)(crc >> 8);
+    resp[4] = (uint8_t)(crc & 0xFF);
+
+    // Индикация передачи и само отправление
+    //HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
+    HAL_UART_Transmit(&huart1, resp, sizeof(resp), 100);
+    SwitchToReceive();
+    //HAL_UART_DMAResume(&huart1);
+    //HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+    
+    
+    HAL_IWDG_Refresh(&hiwdg);
+    
+
+    //  Помечаем флаг обновления в конце флеша
+    HAL_FLASH_Unlock();
+    HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, UPDATE_FLAG, 0x1111);
+    HAL_FLASH_Lock();
+
+    HAL_DeInit();
+    HAL_NVIC_SystemReset();
+}
+
+
 
 void SetOsAddr(int8_t iAddr) {
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4 , (iAddr & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -1085,6 +1314,43 @@ void StartTask02(void const * argument)
     
     osDelay(2);
     HAL_IWDG_Refresh(&hiwdg);
+    
+    
+    
+    if(new_paket)
+    {
+         osDelay(modbus_timeout);    
+          //HAL_Delay(modbus_timeout);
+                    
+            if(receive_buf[0] == gID){
+        switch (receive_buf[1]){
+             case 0x03:                                                         //read Digital output
+               gLastTickCount = xTaskGetTickCount();
+              RDO_command_1(receive_buf[1]);                            
+              break;
+             case 0x0F:                                                         //write Multiple Digital outputs
+               gLastTickCount = xTaskGetTickCount();
+              WMDO_command_15(receive_buf[1]);                            
+              break;
+             case 0x06:
+                func_06();
+          
+               break;
+               
+             case 0x2B:
+                  OS_update();
+               break;
+             default:                                                           //errors handler
+              ERROR_handler(MODBUS_ILLEGAL_FUNCTION);                           //MODBUS ILLEGAL FUNCTION//
+              break;
+             
+         }       
+       }
+      else{ 
+        ERROR_checksum_handler();
+      }
+     new_paket = 0;
+    }
   }
   /* USER CODE END StartTask02 */
 }
