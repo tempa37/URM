@@ -37,7 +37,6 @@
 /* USER CODE BEGIN PD */
 #define buf_size_rx             11
 #define buf_size_tx             14
-//#define ID                      0x01
 #define MODBUS_ILLEGAL_FUNCTION 0x01
 #define ILLEGAL_DATA_ADDRESS    0x02
 #define ILLEGAL_DATA_VALUE      0x03
@@ -69,30 +68,72 @@ uint8_t transmit_buf[buf_size_tx] = {0};
 uint8_t state = 0;
 uint8_t buf_of_control = 0;
 uint8_t a,b,state11 = 0xff, global_error = 0x00;
-//uint8_t state22 = 0xFF;
-uint8_t investigator = 0x00;
-uint8_t readout = 0;
 extern bool FLAG_OK = true;
-uint8_t gID = 0;
+uint16_t gID = 0;
 uint32_t cntr = 0;
+uint8_t gInp = 0;
+uint16_t gTumblerBuff = 0;
+uint8_t gOsBuff = 0;
 
+/* Конфигурация UART */
+typedef struct
+{
+  uint16_t baud_x100;   // 1152 -> 115200
+  uint16_t wordlen;     // 8 or 9
+  uint16_t parity;      // 0-none,1-odd,2-even
+  uint16_t stop;        // 1 or 2
+} UartCfgFlash;
+/* USER CODE END PTD */
+
+/* USER CODE BEGIN PV */
+static UartCfgFlash gUartCfg;
+static UartCfgFlash def_uart;
+
+UartCfgFlash def_uart = {
+    .baud_x100   = 1152u,
+    .wordlen = UART_WORDLENGTH_9B,
+    .stop   = UART_STOPBITS_1,
+    .parity     = UART_PARITY_EVEN
+};
+
+
+UartCfgFlash gUartCfg = {
+    .baud_x100   = 1152u,
+    .wordlen = UART_WORDLENGTH_9B,
+    .stop   = UART_STOPBITS_1,
+    .parity     = UART_PARITY_EVEN
+};
+
+
+
+bool gReset = false;
+bool gCheckingTumbler = false;
 
 #define FLASH_PAGE_SIZE_F030   0x400u 
 #define FLASH_CFG_PAGE_ADDR    0x08007C00u //разрешаем запись только с этого адреса и далее
 #define UPDATE_FLAG            0x08007C04u
 #define UPDATE_FLAG2           0x08007C08u
 
+#define BAUD_RATE              0x08007C0Cu
+#define WORD_LENGHT            0x08007C10u
+#define STOP_BITS              0x08007C14u
+#define PARITY                 0x08007C18u
+#define ID_MODBUS              0x08007C1Cu
 
-#define MODBUS_TIMEOUT_ADDRESS     0x08007C00
-#define MODBUS_TIMEOUT_MAX   1000u
+#define TUMBLER_STATES_NUM     256
 
-#define FLASH_BACKUP_LEN 100u //при перезаписи флага копируем в буффер первые 100 байт
+#define VECTORS_SRAM_BASE      (0x20000000UL)
+#define MODBUS_TIMEOUT_ADDRESS 0x08007C00
+#define MODBUS_TIMEOUT_MAX     1000u
+
+#define PASS                   0x3131  //12593 in dec
+
+#define FLASH_BACKUP_LEN       100u //при перезаписи флага копируем в буффер первые 100 байт
 
 volatile uint16_t modbus_timeout = 20;
 volatile uint16_t new_paket = 0;
 
 volatile uint8_t gCrcErrCnt = 0;
-#define VECTORS_SRAM_BASE   (0x20000000UL)
 #pragma section = ".intvec"   // IAR: даёт доступ к началу/концу секции
 /* USER CODE END PV */
 
@@ -107,28 +148,36 @@ void StartDefaultTask(void const * argument);
 void StartTask02(void const * argument);
 
 /* USER CODE BEGIN PFP */
-void RDO_command_1(uint8_t command_num);
-void WDO_command_5(uint8_t command_num);
-void WMDO_command_15(uint8_t command_num);
-void ERROR_checksum_handler ();
-void ERROR_handler(uint8_t command_num);
-void check_addr();
-void single_DO();
-void double_DO();
-void reading_DO();
-void revolver_on();
-void revolver_off();
-void shoot(uint8_t shift, uint8_t meaning);
-void BDU_pin_activate(uint8_t number, uint8_t on_off);
-void zeroing_the_buffer(void);
-uint8_t ID_parsing(void);
-void UART1_FullRestartRx(void);
-void func_06(void);
-//uint8_t change_i2c(void);
+void RDO_command_1(uint8_t command_num);   //modbus 0x01
+void WMDO_command_15(uint8_t command_num); //modbus 0x0F
+
+void ERROR_checksum_handler();  //modbus error
+void ERROR_handler(uint8_t command_num); //modbus error
+
+void single_DO();  //запсь одного регистра
+void double_DO();  //запись регистров modbus
+void reading_DO(); //чтение регистра modbus
+
+void UART1_FullRestartRx(void); //Поднимает uart когда тот упал
+void zeroing_the_buffer(void);  //очищает RX буффер, мб избыточна
+
+static void UartCfg_LoadFromFlash(UartCfgFlash *cfg); //загружает настройки из флеша 
+static void UartCfg_SetDefaults(UartCfgFlash *cfg);   //ставит дефолтные настройки
+static bool UartCfg_Validate(const UartCfgFlash *cfg); //проверяет настройки из флеша
+static void UartCfg_Apply(const UartCfgFlash *cfg);   //Применяет настройки uart
 
 
-HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value);
-HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out);
+uint8_t ID_parsing(void); //читает UART ID с перемычек
+void func_06(void);   //запись регистра времени ответа modbus
+void OS_update(void); //помечает флагом что началось обновление
+void SetOsAddr(int8_t iAddr); //считывает обратную связь
+void CheckTumblerSetting(void); //заполняет gTumblerBuff (состояние тумблеров)
+
+HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value); //записывает флаги
+HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out);               //читает флаги  
+static void VectorTable_CopyToSRAM_AndRemap(void);                           //ремап таблицы прерываний
+void SwitchToReceive();         //переключение на прием
+void ResetOutput();             //сброс состояний пинов
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -192,31 +241,11 @@ void zeroing_the_buffer(void)
 {
   memset(receive_buf, 0, 11);
   SwitchToReceive();
-//  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT);
 }
 
-uint8_t change_i2c(void)
-{
-  uint8_t out = 0;
-  uint8_t port[RELE_NUM];
-  
-  port[0] = (GPIOB->ODR & GPIO_ODR_0) ? 1 : 0;
-  port[1] = (GPIOA->ODR & GPIO_ODR_7) ? 1 : 0;
-  port[2] = (GPIOB->ODR & GPIO_ODR_1) ? 1 : 0;
-  port[3] = (GPIOA->ODR & GPIO_ODR_8) ? 1 : 0;
-  port[4] = (GPIOA->ODR & GPIO_ODR_4) ? 1 : 0;
-  port[5] = (GPIOA->ODR & GPIO_ODR_3) ? 1 : 0;
-  port[6] = (GPIOA->ODR & GPIO_ODR_5) ? 1 : 0;
-  port[7] = (GPIOA->ODR & GPIO_ODR_6) ? 1 : 0;
-  
-  for (int i = 0; i < RELE_NUM; i++)
-    out |= (port[i] << i);
-
-  return out;
-}
 
 extern TickType_t gLastTickCount;
+
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
@@ -225,6 +254,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     new_paket = 1;
   }
 }
+
 
 //Handler of command 0x01
 void RDO_command_1(uint8_t command_num){
@@ -304,15 +334,15 @@ void ERROR_handler(uint8_t command_num)
     HAL_UART_Transmit(&huart1, transmit_buf,  5, 10);
     
     SwitchToReceive();
-//    HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//    __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
 }
 
-#define TUMBLER_STATES_NUM 256
-uint16_t gTumblerBuff = 0;
 
-uint8_t gOsBuff = 0;
-
+/*
+ *  reading_DO
+ * ---------
+ * Запись регистра 
+ * 
+ */
 void reading_DO()
 {
     uint16_t checksum = 0;
@@ -322,7 +352,7 @@ void reading_DO()
         ERROR_handler(ILLEGAL_DATA_VALUE);  //ILLEGAL DATA VALUE 
       }
   
-    //check_addr();
+
     int cCrcIdx = 5;
     if (receive_buf[5] == 0x02) 
       {
@@ -357,6 +387,13 @@ void reading_DO()
     SwitchToReceive(); 
 }
 
+
+/*
+ *  func_06
+ * ---------
+ * Запись регистра 0x03 "таймаут ответа по modbus"
+ * 
+ */
 void func_06(void)
 {
   
@@ -409,8 +446,6 @@ void func_06(void)
 }
 
 
-bool gReset = false;
-bool gCheckingTumbler = false;
 
 void ResetOutput() {
   gReset = true;
@@ -419,6 +454,14 @@ void ResetOutput() {
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
 }
 
+
+
+/*
+ *  double_DO
+ * ---------
+ * Запись регистров
+ * 
+ */
 void single_DO()
 {
   uint16_t checksum = 0;
@@ -496,7 +539,14 @@ void single_DO()
 //  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
 }
 
-uint8_t gInp = 0;
+
+/*
+ *  double_DO
+ * ---------
+ * Запись регистров
+ * 
+ */
+
 void double_DO()
 {
   uint16_t checksum = 0;
@@ -572,63 +622,6 @@ void double_DO()
           }
   }
   
-
-  
-  /*
-  if (receive_buf[8] & 0x01){
-        state = 0x01;
-        }
-        else{
-          state = state & (0 << 0);
-        }
-  if (receive_buf[8] & 0x02){     
-        state = state + (1 << 0x01);
-        }
-        else{
-        state = state + (0 << 0x01);
-        }
-  if (receive_buf[8] & 0x04){
-        state = state + (1 << 0x02);
-        }
-        else{
-        state = state + (0 << 0x02);
-        }
-  if (receive_buf[8] & 0x08){
-        state = state + (1 << 0x03);
-        }
-        else{
-        state = state + (0 << 0x03);
-        }
-  if (receive_buf[8] & 0x10){
-        state = state + (1 << 0x04);
-        }
-        else{
-        state = state + (0 << 0x04);
-        }
-  if (receive_buf[8] & 0x20){
-        state = state + (1 << 0x05);
-        }
-        else{
-        state = state + (0 << 0x05);
-        }
-  if (receive_buf[8] & 0x40){
-        state = state + (1 << 0x06);
-        }
-        else{
-        state = state + (0 << 0x06);
-        }
-  if (receive_buf[8] & 0x80){
-        state = state + (1 << 0x07);
-        }
-        else{
-        state = state + (0 << 0x07);
-        }
-  
-  */
-  
-
-
-
   transmit_buf[0] = gID;
   transmit_buf[1] = receive_buf[1];
   transmit_buf[2] = receive_buf[2];
@@ -642,58 +635,16 @@ void double_DO()
   HAL_UART_Transmit(&huart1, transmit_buf,  8, 10);
   
   SwitchToReceive();
-//  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
+
 }
 
-void check_addr()
-{
-  if (receive_buf[3] == 0x00){
-    if(receive_buf[5] > 0x08){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x01){
-    if(receive_buf[5] > 0x07){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x02){
-    if(receive_buf[5] > 0x06){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x03){
-    if(receive_buf[5] > 0x05){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x04){
-    if(receive_buf[5] > 0x04){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x05){
-    if(receive_buf[5] > 0x03){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x06){
-    if(receive_buf[5] > 0x02){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] == 0x07){
-    if(receive_buf[5] > 0x01){
-      ERROR_handler(ILLEGAL_DATA_ADDRESS);                                      //ILLEGAL DATA ADDRESS 
-    }
-  }
-  if (receive_buf[3] > 0x07){
-    ERROR_handler(ILLEGAL_DATA_ADDRESS);                                        //ILLEGAL DATA ADDRESS 
-  }
-}
-
-void CheckTumblerSetting() {
+/*
+ * Flash_ReadU16
+ * ---------
+ * Читает переменную по адресу
+ * 
+ */
+void CheckTumblerSetting(void) {
   uint8_t cRx;
   uint16_t i = 0;
   uint16_t cTumblerBuff = 0;
@@ -764,11 +715,8 @@ int main(void)
   HAL_I2C_Master_Transmit(&hi2c1, I2C_DEV_ADDR, &state11, 1, 100);
   CheckTumblerSetting();
   gID = ID_parsing();
-  //HAL_I2C_Master_Transmit(&hi2c1, I2C_DEV_ADDR, &state22, 1, 100);
+  UartCfg_LoadFromFlash(&gUartCfg);
   SwitchToReceive();
-//  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
-  //HAL_UART_Receive_DMA(&huart1, recive_buf, buf_size_rx);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -1041,7 +989,12 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-
+/*
+ * UART1_FullRestartRx
+ * ---------
+ * жесткий рестарт UART при зависании
+ * 
+ */
 void UART1_FullRestartRx(void)
 {
   // 1) Защититься от гонок с IRQ UART/DMA
@@ -1111,13 +1064,20 @@ void UART1_FullRestartRx(void)
 }
 
 
+
+/*
+ * Flash_ReadU16
+ * ---------
+ * Читает переменную по адресу
+ * 
+ */
 HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out)
 {
   if (out == NULL) return HAL_ERROR;
   if ((addr & 0x1u) != 0u) return HAL_ERROR;          // halfword alignment
 
   uint16_t v = *(volatile const uint16_t*)addr;       // memory-mapped чтение
-  if (v == 0xFFFFu) {                                 // стёртая флеш обычно читается как 0xFFFF [web:21]
+  if (v == 0xFFFFu) {                                 // стёртая флеш 
     v = 10u;
   }
   *out = v;
@@ -1125,12 +1085,17 @@ HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out)
 }
 
 
-
+/*
+ * Flash_WriteU16_Preserve100
+ * ---------
+ * Записывает переменную по адресу, сохраняя первые 100 байт
+ * 
+ */
 HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
 {
   if ((addr & 0x1u) != 0u) return HAL_ERROR; // halfword alignment
 
-  // Если реально используешь только страницу 0x08007C00 — лучше так отсеять ошибочные адреса
+
   if ((addr < FLASH_CFG_PAGE_ADDR) || (addr >= (FLASH_CFG_PAGE_ADDR + FLASH_PAGE_SIZE_F030)))
     return HAL_ERROR;
 
@@ -1138,13 +1103,13 @@ HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
   uint32_t page_start = addr & ~(FLASH_PAGE_SIZE_F030 - 1u);
   uint32_t off        = addr - page_start;
 
-  // По ТЗ сохраняем/перезаписываем только первые 100 байт страницы
+  // перезаписываем только первые 100 байт страницы
   if ((off + 2u) > FLASH_BACKUP_LEN) return HAL_ERROR;
 
   uint8_t buf[FLASH_BACKUP_LEN];
   memcpy(buf, (const void*)page_start, FLASH_BACKUP_LEN);
 
-  // Записали новое значение в копию первых 100 байт (little-endian)
+  // Записали новое значение в копию первых 100 байт
   buf[off + 0u] = (uint8_t)(value & 0xFFu);
   buf[off + 1u] = (uint8_t)((value >> 8) & 0xFFu);
 
@@ -1154,9 +1119,9 @@ HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
   HAL_FLASH_Unlock();
 
   FLASH_EraseInitTypeDef erase = {0};
-  erase.TypeErase   = FLASH_TYPEERASE_PAGES;     // постраничное стирание [web:4]
-  erase.PageAddress = page_start;                // адрес начала страницы [web:4]
-  erase.NbPages     = 1;                         // одна страница [web:4]
+  erase.TypeErase   = FLASH_TYPEERASE_PAGES;     // постраничное стирание 
+  erase.PageAddress = page_start;                // адрес начала страницы 
+  erase.NbPages     = 1;                         // одна страница 
 
   st = HAL_FLASHEx_Erase(&erase, &page_error);
   if (st != HAL_OK) {
@@ -1164,7 +1129,7 @@ HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
     return st;
   }
 
-  // Восстановить первые 100 байт halfword’ами (16 бит) [web:14]
+  // Восстановить первые 100 байт 
   for (uint32_t i = 0; i < FLASH_BACKUP_LEN; i += 2u) {
     uint16_t hw = (uint16_t)(buf[i] | ((uint16_t)buf[i + 1u] << 8));
     st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, page_start + i, hw); 
@@ -1213,6 +1178,106 @@ void OS_update(void)
     HAL_DeInit();
     HAL_NVIC_SystemReset();
 }
+
+
+
+static bool UartCfg_Validate(const UartCfgFlash *cfg)
+{
+  // baud_x100: 12..11520 => 1200..1_152_000 (подстрой под свои требования)
+  if (cfg->baud_x100 < 12u || cfg->baud_x100 > 11520u) return false;
+
+  if (!(cfg->wordlen == 8u || cfg->wordlen == 9u)) return false;
+  if (!(cfg->parity == 0u || cfg->parity == 1u || cfg->parity == 2u)) return false;
+  if (!(cfg->stop == 1u || cfg->stop == 2u)) return false;
+
+  // Важно: в HAL “9B + parity” фактически даёт 8 data bits + parity (типичный Modbus RTU).
+  // Поэтому для Modbus обычно cfg->wordlen=9 и parity!=0.
+  if (cfg->wordlen == 9u && cfg->parity == 0u) return false;
+
+  return true;
+}
+
+
+static void UartCfg_SetDefaults(UartCfgFlash *cfg)
+{
+  cfg->baud_x100 = def_uart.baud_x100 * 100;
+  cfg->wordlen   = def_uart.wordlen;
+  cfg->parity    = def_uart.parity;
+  cfg->stop      = def_uart.stop;
+}
+
+static void UartCfg_LoadFromFlash(UartCfgFlash *cfg)
+{
+
+  (void)Flash_ReadU16(BAUD_RATE,   &cfg->baud_x100);
+  (void)Flash_ReadU16(WORD_LENGHT, &cfg->wordlen);
+  (void)Flash_ReadU16(PARITY,      &cfg->parity);
+  (void)Flash_ReadU16(STOP_BITS,   &cfg->stop);
+  if(gID == 0x00)
+  {
+    (void)Flash_ReadU16(ID_MODBUS,   &gID);
+    if(gID == 0xFF)
+    {
+      gID = 0x01;
+    }
+  }
+
+
+  if (!UartCfg_Validate(cfg))
+  {
+    UartCfg_SetDefaults(cfg);
+  }
+}
+
+
+
+static void UartCfg_Apply(const UartCfgFlash *cfg)
+{
+  // 1) Прибить текущие операции UART/DMA (как минимум RX)
+  (void)HAL_UART_Abort(&huart1);
+  (void)HAL_UART_DMAStop(&huart1);
+  if (huart1.hdmarx) (void)HAL_DMA_Abort(huart1.hdmarx);
+  if (huart1.hdmatx) (void)HAL_DMA_Abort(huart1.hdmatx);
+
+  // 2) Дождаться окончания передачи (на всякий случай)
+  while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET) {;}
+
+  // 3) Очистить ошибки
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
+
+  // 4) Переинициализация UART с новыми параметрами
+  (void)HAL_UART_DeInit(&huart1);
+
+  huart1.Init.BaudRate   = (uint32_t)cfg->baud_x100 * 100u;
+  huart1.Init.WordLength = (cfg->wordlen == 9u) ? UART_WORDLENGTH_9B : UART_WORDLENGTH_8B;
+
+  switch (cfg->parity)
+  {
+    case 1u: huart1.Init.Parity = UART_PARITY_ODD;  break;
+    case 2u: huart1.Init.Parity = UART_PARITY_EVEN; break;
+    default: huart1.Init.Parity = UART_PARITY_NONE; break;
+  }
+
+  huart1.Init.StopBits   = (cfg->stop == 2u) ? UART_STOPBITS_2 : UART_STOPBITS_1;
+  huart1.Init.Mode       = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl  = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+
+  // У тебя USART в RS485 режиме:
+  if (HAL_RS485Ex_Init(&huart1, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // 5) Поднять RX обратно
+  SwitchToReceive();
+}
+
 
 
 
