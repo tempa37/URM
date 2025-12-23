@@ -36,7 +36,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define buf_size_rx             11
-#define buf_size_tx             14
+#define buf_size_tx             30
 #define MODBUS_ILLEGAL_FUNCTION 0x01
 #define ILLEGAL_DATA_ADDRESS    0x02
 #define ILLEGAL_DATA_VALUE      0x03
@@ -70,6 +70,7 @@ uint8_t buf_of_control = 0;
 uint8_t a,b,state11 = 0xff, global_error = 0x00;
 extern bool FLAG_OK = true;
 uint16_t gID = 0;
+uint16_t temp_gID = 0;
 uint32_t cntr = 0;
 uint8_t gInp = 0;
 uint16_t gTumblerBuff = 0;
@@ -86,25 +87,28 @@ typedef struct
 /* USER CODE END PTD */
 
 /* USER CODE BEGIN PV */
-static UartCfgFlash gUartCfg;
-static UartCfgFlash def_uart;
+
+#pragma location = 0x20000000             //НЕ ТРОГАТЬ, В ДАННОЙ ОБЛАСТИ ВЕКТОР ПРЕРЫВАНИЙ
+__no_init __root uint8_t gVecPad[0xFF];   //НЕ ТРОГАТЬ, В ДАННОЙ ОБЛАСТИ ВЕКТОР ПРЕРЫВАНИЙ
+
 
 UartCfgFlash def_uart = {
     .baud_x100   = 1152u,
-    .wordlen = UART_WORDLENGTH_9B,
+    .wordlen = UART_WORDLENGTH_8B,
     .stop   = UART_STOPBITS_1,
-    .parity     = UART_PARITY_EVEN
+    .parity     = UART_PARITY_NONE
 };
 
 
 UartCfgFlash gUartCfg = {
     .baud_x100   = 1152u,
-    .wordlen = UART_WORDLENGTH_9B,
+    .wordlen = UART_WORDLENGTH_8B,
     .stop   = UART_STOPBITS_1,
-    .parity     = UART_PARITY_EVEN
+    .parity     = UART_PARITY_NONE
 };
 
-
+static volatile uint32_t timer_ms = 0;
+static volatile uint8_t  timer_finish = 0;
 
 bool gReset = false;
 bool gCheckingTumbler = false;
@@ -127,6 +131,7 @@ bool gCheckingTumbler = false;
 #define MODBUS_TIMEOUT_MAX     1000u
 
 #define PASS                   0x3131  //12593 in dec
+uint16_t password = 0;
 
 #define FLASH_BACKUP_LEN       100u //при перезаписи флага копируем в буффер первые 100 байт
 
@@ -166,6 +171,8 @@ static void UartCfg_SetDefaults(UartCfgFlash *cfg);   //ставит дефол�
 static bool UartCfg_Validate(const UartCfgFlash *cfg); //проверяет настройки из флеша
 static void UartCfg_Apply(const UartCfgFlash *cfg);   //Применяет настройки uart
 
+void send_uart_signal_once(void);
+static void ApplyUartSettingsBeforeSignal(void);
 
 uint8_t ID_parsing(void); //читает UART ID с перемычек
 void func_06(void);   //запись регистра времени ответа modbus
@@ -347,7 +354,7 @@ void reading_DO()
 {
     uint16_t checksum = 0;
     
-    if (receive_buf[5] > 0x03)
+    if (receive_buf[5] > 0x09)
       {
         ERROR_handler(ILLEGAL_DATA_VALUE);  //ILLEGAL DATA VALUE 
       }
@@ -368,25 +375,63 @@ void reading_DO()
         transmit_buf[5] = gTumblerBuff; 
         transmit_buf[6] = state;
       }
-    if (receive_buf[5] == 0x03)  
+    if (receive_buf[5] >= 0x03)  
       {
         transmit_buf[7] = (uint8_t)(modbus_timeout >> 8);   
         transmit_buf[8] = (uint8_t)(modbus_timeout & 0xFF); // Lo
         cCrcIdx = 9;
       }
+        if (receive_buf[5] >= 0x04)  
+      {
+        transmit_buf[9] = (uint8_t)(gUartCfg.baud_x100 >> 8);   
+        transmit_buf[10] = (uint8_t)(gUartCfg.baud_x100 & 0xFF); // Lo
+        cCrcIdx = 11;
+      }
+        if (receive_buf[5] >= 0x05)  
+      {
+        transmit_buf[11] = (uint8_t)(gUartCfg.wordlen >> 8);   
+        transmit_buf[12] = (uint8_t)(gUartCfg.wordlen & 0xFF); // Lo
+        cCrcIdx = 13;
+      }
+        if (receive_buf[5] >= 0x06)  
+      {
+        transmit_buf[13] = (uint8_t)(gUartCfg.stop >> 8);   
+        transmit_buf[14] = (uint8_t)(gUartCfg.stop & 0xFF); // Lo
+        cCrcIdx = 15;
+      }
+        if (receive_buf[5] >= 0x07)  
+      {
+        transmit_buf[15] = (uint8_t)(gUartCfg.parity >> 8);   
+        transmit_buf[16] = (uint8_t)(gUartCfg.parity & 0xFF); // Lo
+        cCrcIdx = 17;
+      }
+        if (receive_buf[5] >= 0x08)  
+      {
+        transmit_buf[17] = (uint8_t)(gID >> 8);   
+        transmit_buf[18] = (uint8_t)(gID & 0xFF); // Lo
+        cCrcIdx = 19;
+      }
+        if (receive_buf[5] >= 0x09)  
+      {
+        transmit_buf[19] = (uint8_t)(0x0000 >> 8);   
+        transmit_buf[20] = (uint8_t)(0x0000 & 0xFF); // Lo
+        cCrcIdx = 21;
+      }
+        
+
+    
+    
+    
+    
+    
     checksum = mbcrc(transmit_buf, cCrcIdx);                    //make CRC data
     transmit_buf[cCrcIdx] = (uint8_t) ((checksum >> 8) & 0xFF); //write CRC Hi byte
     transmit_buf[cCrcIdx + 1] = (uint8_t) (checksum & 0xFF);    //write CRC Lo byte
-    while(cntr<600)
-      {
-        cntr++;
-      }
-    cntr=0;
+
     HAL_UART_Transmit(&huart1, transmit_buf,  cCrcIdx + 2, 10);
     
     SwitchToReceive(); 
 }
-
 
 /*
  *  func_06
@@ -396,53 +441,90 @@ void reading_DO()
  */
 void func_06(void)
 {
-  
-  uint16_t crc = mbcrc(receive_buf, 6);
+    uint16_t crc = mbcrc(receive_buf, 6);
 
-  // CRC check (в твоём проекте CRC кладётся как Hi затем Lo)
-  if ((receive_buf[6] != (uint8_t)((crc >> 8) & 0xFF)) ||
-      (receive_buf[7] != (uint8_t)(crc & 0xFF)))
-  {
-    ERROR_checksum_handler();   // по Modbus: при CRC ошибке slave молчит
-    return;
-  }
 
-  uint16_t regAddr  = (uint16_t)((receive_buf[2] << 8) | receive_buf[3]);
-  uint16_t regValue = (uint16_t)((receive_buf[4] << 8) | receive_buf[5]);
+    if ((receive_buf[6] != (uint8_t)((crc >> 8) & 0xFF)) ||
+        (receive_buf[7] != (uint8_t)(crc & 0xFF)))
+    {
+        ERROR_checksum_handler();
+        return;
+    }
 
-  // принимаем только "регистр 3"
-  if (regAddr != 0x02)
-  {
-    ERROR_handler(ILLEGAL_DATA_ADDRESS);
-    return;
-  }
+    uint16_t regAddr  = (uint16_t)((receive_buf[2] << 8) | receive_buf[3]);
+    uint16_t regValue = (uint16_t)((receive_buf[4] << 8) | receive_buf[5]);
 
-  // (опционально) валидация значения
-  if ((regValue > MODBUS_TIMEOUT_MAX))
-  {
-    ERROR_handler(ILLEGAL_DATA_VALUE);
-    return;
-  }
+    switch (regAddr)
+      {
+          case 0x02:   
+              if (regValue > MODBUS_TIMEOUT_MAX)
+              {
+                  ERROR_handler(ILLEGAL_DATA_VALUE);
+                  return;
+              }
+              modbus_timeout = regValue;      // volatile uint16_t
+              break;
 
-  // запись значения
-  modbus_timeout = regValue;
-  Flash_WriteU16_Preserve100(MODBUS_TIMEOUT_ADDRESS, modbus_timeout);
+          case 0x03:
+              gUartCfg.baud_x100 = regValue;
+              break;
 
-  // ответ — эхо запроса
-  transmit_buf[0] = gID;              // можно receive_buf[0], но gID логичнее
-  transmit_buf[1] = 0x06;
-  transmit_buf[2] = receive_buf[2];
-  transmit_buf[3] = receive_buf[3];
-  transmit_buf[4] = receive_buf[4];
-  transmit_buf[5] = receive_buf[5];
+          case 0x04:
+              gUartCfg.wordlen = regValue;
+              break;
 
-  crc = mbcrc(transmit_buf, 6);
-  transmit_buf[6] = (uint8_t)((crc >> 8) & 0xFF);
-  transmit_buf[7] = (uint8_t)(crc & 0xFF);
+          case 0x05:
+              gUartCfg.stop = regValue;
+              break;
 
-  HAL_UART_Transmit(&huart1, transmit_buf, 8, 10);
-  SwitchToReceive();
-  
+          case 0x06:
+              gUartCfg.parity = regValue;
+              break;
+
+          case 0x07:
+              temp_gID = regValue;
+              break;
+
+          case 0x08:
+              password = regValue;
+              if(password == PASS)
+              {
+                gID = temp_gID;
+                Flash_WriteU16_Preserve100(BAUD_RATE, gUartCfg.baud_x100);
+                Flash_WriteU16_Preserve100(WORD_LENGHT, gUartCfg.wordlen);
+                Flash_WriteU16_Preserve100(STOP_BITS, gUartCfg.stop);
+                Flash_WriteU16_Preserve100(PARITY, gUartCfg.parity);
+                Flash_WriteU16_Preserve100(ID_MODBUS, temp_gID);
+                UartCfg_LoadFromFlash(&gUartCfg);
+                UartCfg_Apply(&gUartCfg);
+              }
+              else
+              {
+                UartCfg_SetDefaults(&gUartCfg);
+              }
+              break;
+
+          default:
+              ERROR_handler(ILLEGAL_DATA_ADDRESS);
+              return;
+      }
+
+
+
+
+    transmit_buf[0] = gID;
+    transmit_buf[1] = 0x06;
+    transmit_buf[2] = receive_buf[2];
+    transmit_buf[3] = receive_buf[3];
+    transmit_buf[4] = receive_buf[4];
+    transmit_buf[5] = receive_buf[5];
+
+    crc = mbcrc(transmit_buf, 6);
+    transmit_buf[6] = (uint8_t)((crc >> 8) & 0xFF);
+    transmit_buf[7] = (uint8_t)(crc & 0xFF);
+
+    HAL_UART_Transmit(&huart1, transmit_buf, 8, 10);
+    SwitchToReceive();
 }
 
 
@@ -674,6 +756,44 @@ void CheckTumblerSetting(void) {
   gReset = false;
 }
 
+//Настройка USART на типовые настройки для отпрвки сигнала
+static void ApplyUartSettingsBeforeSignal(void)
+{
+  HAL_UART_AbortReceive_IT(&huart1);
+  
+ while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET) { /* wait */ }
+
+  /* Clear ORE/FE/NE just in case: */
+  __HAL_UART_CLEAR_OREFLAG(&huart1);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF | UART_CLEAR_NEF);
+  
+  
+  HAL_UART_DeInit(&huart1);
+  huart1.Init.BaudRate = 56000;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+
+  huart1.Init.Parity = UART_PARITY_NONE;
+  
+  huart1.Init.StopBits =UART_STOPBITS_1;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK) {
+    Error_Handler();
+  } 
+}
+
+void send_uart_signal_once(void) {
+    static uint8_t has_run = 0;      // флаг, инициализирован нулём только при первом заходе
+    if (!has_run) {                  // если ещё не вызывали
+        ApplyUartSettingsBeforeSignal();
+        timer_ms = HAL_GetTick() + 3000; // через 3 секунды перенастройка USART
+        has_run = 1;                 // отметили, что код уже выполнялся
+        SwitchToReceive();
+    }
+}
 
 
 /* USER CODE END 0 */
@@ -716,6 +836,7 @@ int main(void)
   CheckTumblerSetting();
   gID = ID_parsing();
   UartCfg_LoadFromFlash(&gUartCfg);
+  UartCfg_Apply(&gUartCfg);
   SwitchToReceive();
   /* USER CODE END 2 */
 
@@ -902,10 +1023,10 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.BaudRate = gUartCfg.baud_x100 * 100;
+  huart1.Init.WordLength = gUartCfg.wordlen;
+  huart1.Init.StopBits = gUartCfg.stop;
+  huart1.Init.Parity = gUartCfg.parity;
   huart1.Init.Mode = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
@@ -1183,16 +1304,54 @@ void OS_update(void)
 
 static bool UartCfg_Validate(const UartCfgFlash *cfg)
 {
-  // baud_x100: 12..11520 => 1200..1_152_000 (подстрой под свои требования)
+  if (cfg == NULL) return false;
+
+  // baud_x100: подстрой границы под проект (пример: 1200..1_152_000)
   if (cfg->baud_x100 < 12u || cfg->baud_x100 > 11520u) return false;
 
-  if (!(cfg->wordlen == 8u || cfg->wordlen == 9u)) return false;
-  if (!(cfg->parity == 0u || cfg->parity == 1u || cfg->parity == 2u)) return false;
-  if (!(cfg->stop == 1u || cfg->stop == 2u)) return false;
+  // Word length: только валидные HAL-константы
+  switch (cfg->wordlen)
+  {
+#if defined(UART_WORDLENGTH_7B)
+    case UART_WORDLENGTH_7B:
+#endif
+    case UART_WORDLENGTH_8B:
+    case UART_WORDLENGTH_9B:
+      break;
+    default:
+      return false;
+  }
 
-  // Важно: в HAL “9B + parity” фактически даёт 8 data bits + parity (типичный Modbus RTU).
-  // Поэтому для Modbus обычно cfg->wordlen=9 и parity!=0.
-  if (cfg->wordlen == 9u && cfg->parity == 0u) return false;
+  // Parity: только валидные HAL-константы
+  switch (cfg->parity)
+  {
+    case UART_PARITY_NONE:
+    case UART_PARITY_EVEN:
+    case UART_PARITY_ODD:
+      break;
+    default:
+      return false;
+  }
+
+  // Stop bits: только валидные HAL-константы
+  switch (cfg->stop)
+  {
+    case UART_STOPBITS_0_5:
+    case UART_STOPBITS_1:
+    case UART_STOPBITS_1_5:
+    case UART_STOPBITS_2:
+      break;
+    default:
+      return false;
+  }
+
+  // Запрет "8 бит с четностью" (на STM32 это по факту 7 data bits + parity)
+  if ((cfg->wordlen == UART_WORDLENGTH_8B) && (cfg->parity != UART_PARITY_NONE))
+    return false;
+
+  // Запрет "9 бит + parity none" (чистые 9 data bits)
+  if ((cfg->wordlen == UART_WORDLENGTH_9B) && (cfg->parity == UART_PARITY_NONE))
+    return false;
 
   return true;
 }
@@ -1200,7 +1359,7 @@ static bool UartCfg_Validate(const UartCfgFlash *cfg)
 
 static void UartCfg_SetDefaults(UartCfgFlash *cfg)
 {
-  cfg->baud_x100 = def_uart.baud_x100 * 100;
+  cfg->baud_x100 = def_uart.baud_x100;
   cfg->wordlen   = def_uart.wordlen;
   cfg->parity    = def_uart.parity;
   cfg->stop      = def_uart.stop;
@@ -1222,7 +1381,8 @@ static void UartCfg_LoadFromFlash(UartCfgFlash *cfg)
     }
   }
 
-
+  temp_gID = gID;
+  
   if (!UartCfg_Validate(cfg))
   {
     UartCfg_SetDefaults(cfg);
@@ -1336,6 +1496,12 @@ void StartDefaultTask(void const * argument)
       HAL_UART_AbortReceive(&huart1);
       UART1_FullRestartRx();
       zeroing_the_buffer();
+    }
+    
+      if ((!timer_finish) && (int32_t)(HAL_GetTick() - timer_ms) >= 0) 
+    {
+        timer_finish = 1;    // сброс, чтобы сработало один раз
+        UartCfg_Apply(&gUartCfg); // вызов по истечении 3 секунд
     }
     
     osDelay(2);
