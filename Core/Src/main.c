@@ -93,7 +93,7 @@ __no_init __root uint8_t gVecPad[0xFF];   //НЕ ТРОГАТЬ, В ДАННОЙ
 
 
 UartCfgFlash def_uart = {
-    .baud_x100   = 1152u,
+    .baud_x100   = 560u,
     .wordlen = UART_WORDLENGTH_8B,
     .stop   = UART_STOPBITS_1,
     .parity     = UART_PARITY_NONE
@@ -171,8 +171,9 @@ static void UartCfg_SetDefaults(UartCfgFlash *cfg);   //ставит дефол�
 static bool UartCfg_Validate(const UartCfgFlash *cfg); //проверяет настройки из флеша
 static void UartCfg_Apply(const UartCfgFlash *cfg);   //Применяет настройки uart
 
-void send_uart_signal_once(void);
-static void ApplyUartSettingsBeforeSignal(void);
+void send_uart_signal_once(void);                    //Для приема сигнала
+static void ApplyUartSettingsBeforeSignal(void);     //Меняет настройки для сигнала (3 сек при старте)
+void usart_signal(void);                             //Отправляет ответ при автоподключении
 
 uint8_t ID_parsing(void); //читает UART ID с перемычек
 void func_06(void);   //запись регистра времени ответа modbus
@@ -261,6 +262,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     new_paket = 1;
   }
 }
+
 
 
 //Handler of command 0x01
@@ -801,7 +803,7 @@ void send_uart_signal_once(void) {
 /**
   * @brief  The application entry point.
   * @retval int
-  */
+*/
 int main(void)
 {
 
@@ -836,7 +838,8 @@ int main(void)
   CheckTumblerSetting();
   gID = ID_parsing();
   UartCfg_LoadFromFlash(&gUartCfg);
-  UartCfg_Apply(&gUartCfg);
+  //UartCfg_Apply(&gUartCfg);
+  send_uart_signal_once();
   SwitchToReceive();
   /* USER CODE END 2 */
 
@@ -1205,6 +1208,58 @@ HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out)
   return HAL_OK;
 }
 
+// Автоподключение: 1 раз при запуске шлёт "RTU response-like" кадр с 6 регистрами настроек
+void usart_signal(void)
+{
+    static bool already_sent = false;
+    if (already_sent) {
+        return;
+    }
+    already_sent = true;
+
+
+    // 2) Собрать кадр: [addr][func=0x03][bytecount=12][6*U16 data][CRC]
+    uint8_t frame[3u + 5u * 2u + 2u] = {0};
+    uint8_t idx = 0u;
+
+    frame[idx++] = (uint8_t)gID;     // slave address (можно заменить на 0x01, если ПК ждёт фиксированный адрес)
+    frame[idx++] = 0x03u;            // Modbus "Read Holding Registers" (ответный кадр)
+    frame[idx++] = 10u;              // 5 регистров * 2 байта
+
+    // 6 регистров: подставил то, что реально есть в твоём коде
+    // 0: baudx100, 1: wordlen, 2: stop, 3: parity, 4: ID, 5: modbustimeout
+    const uint16_t regs[5] = {
+        (uint16_t)gUartCfg.baud_x100,
+        (uint16_t)gUartCfg.wordlen,
+        (uint16_t)gUartCfg.stop,
+        (uint16_t)gUartCfg.parity,
+        (uint16_t)gID,
+    };
+
+    for (uint8_t r = 0u; r < 5u; ++r) {
+        frame[idx++] = (uint8_t)(regs[r] >> 8);
+        frame[idx++] = (uint8_t)(regs[r] & 0xFFu);
+    }
+
+    // В твоём коде CRC кладётся "Hi, потом Lo" — делаем так же
+    uint16_t crc = mbcrc(frame, idx);
+    frame[idx++] = (uint8_t)(crc >> 8);
+    frame[idx++] = (uint8_t)(crc & 0xFFu);
+
+    // 3) Передача (blocking)
+    // ВНИМАНИЕ: у тебя PB5 уже используется в OSupdate(), но проверь, что PB5 реально настроен как выход и это именно DE. [file:1]
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
+    for (volatile uint16_t i = 0u; i < 300u; ++i) { __NOP(); }
+
+    (void)HAL_UART_Transmit(&huart1, frame, idx, HAL_MAX_DELAY);
+    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET) { /* wait */ }
+
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+
+
+    UartCfg_Apply(&gUartCfg);
+}
+
 
 /*
  * Flash_WriteU16_Preserve100
@@ -1550,6 +1605,12 @@ void StartTask02(void const * argument)
     
     if(new_paket)
     {
+      
+       if(receive_buf[0] == 0x41)  //Автоподключение
+       {
+         usart_signal();
+       }
+       
          osDelay(modbus_timeout);    
           //HAL_Delay(modbus_timeout);
                     

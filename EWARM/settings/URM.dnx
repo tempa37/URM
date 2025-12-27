@@ -20,11 +20,11 @@
         <LeaveTargetRunning>_ 0</LeaveTargetRunning>
     </StLinkDriver>
     <DebugChecksum>
-        <Checksum>1654296528</Checksum>
+        <Checksum>206592433</Checksum>
     </DebugChecksum>
     <Exceptions>
-        <StopOnUncaught>_ 0</StopOnUncaught>
         <StopOnThrow>_ 0</StopOnThrow>
+        <StopOnUncaught>_ 0</StopOnUncaught>
     </Exceptions>
     <CallStack>
         <ShowArgs>0</ShowArgs>
@@ -45,8 +45,8 @@
         <ShowTiming>1</ShowTiming>
     </CallStackStripe>
     <PlDriver>
-        <FirstRun>0</FirstRun>
         <MemConfigValue>C:\iar\ewarm-9.70.1\arm\config\debugger\ST\STM32F030K6.ddf</MemConfigValue>
+        <FirstRun>0</FirstRun>
     </PlDriver>
     <Trace1>
         <Enabled>0</Enabled>
@@ -62,11 +62,11 @@
         <OutputEncodingICU>0</OutputEncodingICU>
     </TerminalIO>
     <JLinkDriver>
+        <LeaveTargetRunning>_ 0</LeaveTargetRunning>
+        <CStepIntDis>_ 0</CStepIntDis>
         <jlinkResetStyle>12</jlinkResetStyle>
         <jlinkResetStrategy>0</jlinkResetStrategy>
         <MultiCoreRunAll>0</MultiCoreRunAll>
-        <LeaveTargetRunning>_ 0</LeaveTargetRunning>
-        <CStepIntDis>_ 0</CStepIntDis>
     </JLinkDriver>
     <ArmDriver>
         <EnableCache>0</EnableCache>
@@ -115,11 +115,6 @@
         <Enabled>0</Enabled>
         <ShowSource>0</ShowSource>
     </Trace2>
-    <Aliases>
-        <Count>0</Count>
-        <SuppressDialog>0</SuppressDialog>
-        <SuppressResolveSourcesForDebugTarget>1</SuppressResolveSourcesForDebugTarget>
-    </Aliases>
     <TermIOLog>
         <LoggingEnabled>_ 0</LoggingEnabled>
         <LogFile>_ ""</LogFile>
@@ -128,7 +123,13 @@
         <mode>0</mode>
     </DisassembleMode>
     <Breakpoints2>
-        <Bp0>_ 1 "EMUL_CODE" "{$PROJ_DIR$\..\Core\Src\main.c}.485.15" 0 0 1 "" 0 "" 0</Bp0>
-        <Count>1</Count>
+        <Bp0>_ 1 "EMUL_CODE" "{$PROJ_DIR$\..\Core\Src\main.c}.1611.10" 0 0 1 "" 0 "" 0</Bp0>
+        <Bp1>_ 1 "EMUL_CODE" "{$PROJ_DIR$\..\Core\Src\main.c}.1609.8" 0 0 1 "" 0 "" 0</Bp1>
+        <Count>2</Count>
     </Breakpoints2>
+    <Aliases>
+        <Count>0</Count>
+        <SuppressDialog>0</SuppressDialog>
+        <SuppressResolveSourcesForDebugTarget>1</SuppressResolveSourcesForDebugTarget>
+    </Aliases>
 </settings>
