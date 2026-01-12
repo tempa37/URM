@@ -93,7 +93,7 @@ __no_init __root uint8_t gVecPad[0xFF];   //НЕ ТРОГАТЬ, В ДАННОЙ
 
 
 UartCfgFlash def_uart = {
-    .baud_x100   = 560u,
+    .baud_x100   = 1152u,
     .wordlen = UART_WORDLENGTH_8B,
     .stop   = UART_STOPBITS_1,
     .parity     = UART_PARITY_NONE
@@ -135,7 +135,7 @@ uint16_t password = 0;
 
 #define FLASH_BACKUP_LEN       100u //при перезаписи флага копируем в буффер первые 100 байт
 
-volatile uint16_t modbus_timeout = 20;
+volatile uint16_t modbus_timeout = 0;
 volatile uint16_t new_paket = 0;
 
 volatile uint8_t gCrcErrCnt = 0;
@@ -186,6 +186,7 @@ HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out);               //�
 static void VectorTable_CopyToSRAM_AndRemap(void);                           //ремап таблицы прерываний
 void SwitchToReceive();         //переключение на прием
 void ResetOutput();             //сброс состояний пинов
+static inline uint32_t modbus_t35_us(uint32_t baud); //для расчета задержки modbus
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -464,6 +465,7 @@ void func_06(void)
                   ERROR_handler(ILLEGAL_DATA_VALUE);
                   return;
               }
+              Flash_WriteU16_Preserve100(MODBUS_TIMEOUT_ADDRESS, regValue);
               modbus_timeout = regValue;      // volatile uint16_t
               break;
 
@@ -761,30 +763,50 @@ void CheckTumblerSetting(void) {
 //Настройка USART на типовые настройки для отпрвки сигнала
 static void ApplyUartSettingsBeforeSignal(void)
 {
-  HAL_UART_AbortReceive_IT(&huart1);
-  
- while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET) { /* wait */ }
+  // 1) Прибить текущие операции UART/DMA (как минимум RX, но лучше всё)
+  (void)HAL_UART_Abort(&huart1);
+  (void)HAL_UART_DMAStop(&huart1);
+  if (huart1.hdmarx) { (void)HAL_DMA_Abort(huart1.hdmarx); }
+  if (huart1.hdmatx) { (void)HAL_DMA_Abort(huart1.hdmatx); }
 
-  /* Clear ORE/FE/NE just in case: */
+  // 2) Дождаться окончания передачи (на всякий случай)
+  // Желательно с таймаутом, чтобы не зависнуть навсегда.
+  {
+    uint32_t t0 = HAL_GetTick();
+    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET)
+    {
+      if ((HAL_GetTick() - t0) > 20u) { break; } // 20 мс как пример
+    }
+  }
+
+  // 3) Очистить ошибки/флаги (особенно важно для ORE)
   __HAL_UART_CLEAR_OREFLAG(&huart1);
-  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF | UART_CLEAR_NEF);
-  
-  
-  HAL_UART_DeInit(&huart1);
-  huart1.Init.BaudRate = 56000;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
+  __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
 
-  huart1.Init.Parity = UART_PARITY_NONE;
-  
-  huart1.Init.StopBits =UART_STOPBITS_1;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  // 4) Переинициализация UART с типовыми параметрами для отправки сигнала
+  (void)HAL_UART_DeInit(&huart1);
+
+  huart1.Init.BaudRate   = 56000u;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.Parity     = UART_PARITY_NONE;
+  huart1.Init.StopBits   = UART_STOPBITS_1;
+  huart1.Init.Mode       = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl  = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling    = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling  = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart1) != HAL_OK) {
+
+  // ВАЖНО: если USART реально используется в RS485 режиме, поднимать нужно им же,
+  // иначе может не подняться DE/настройки half-duplex/RS485-логика как в рабочей функции.
+  if (HAL_RS485Ex_Init(&huart1, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
+  {
     Error_Handler();
-  } 
+  }
+
+  // 5) Поднять RX обратно (как и в UartCfg_Apply)
+  SwitchToReceive();
 }
 
 void send_uart_signal_once(void) {
@@ -793,7 +815,6 @@ void send_uart_signal_once(void) {
         ApplyUartSettingsBeforeSignal();
         timer_ms = HAL_GetTick() + 3000; // через 3 секунды перенастройка USART
         has_run = 1;                 // отметили, что код уже выполнялся
-        SwitchToReceive();
     }
 }
 
@@ -1202,7 +1223,7 @@ HAL_StatusTypeDef Flash_ReadU16(uint32_t addr, uint16_t *out)
 
   uint16_t v = *(volatile const uint16_t*)addr;       // memory-mapped чтение
   if (v == 0xFFFFu) {                                 // стёртая флеш 
-    v = 10u;
+    v = 0u;
   }
   *out = v;
   return HAL_OK;
@@ -1565,6 +1586,14 @@ void StartDefaultTask(void const * argument)
 }
 
 /* USER CODE BEGIN Header_StartTask02 */
+
+static inline uint32_t modbus_t35_us(uint32_t baud)
+{
+    if (baud > 19200u) return 1750u;                 
+    return (38500000u + baud - 1u) / baud;          
+}
+
+
 /**
 * @brief Function implementing the myTask02 thread.
 * @param argument: Not used
@@ -1611,8 +1640,18 @@ void StartTask02(void const * argument)
          usart_signal();
        }
        
-         osDelay(modbus_timeout);    
-          //HAL_Delay(modbus_timeout);
+         if(modbus_timeout)
+         {
+            osDelay(modbus_timeout);   
+         }
+         else
+         {
+            uint32_t t35_us = modbus_t35_us(gUartCfg.baud_x100 * 100);
+            uint32_t t35_ms = (t35_us + 999u) / 1000u; // ceil to ms
+            if (t35_ms == 0u) t35_ms = 1u;
+            osDelay(t35_ms);
+         }
+
                     
             if(receive_buf[0] == gID){
         switch (receive_buf[1]){

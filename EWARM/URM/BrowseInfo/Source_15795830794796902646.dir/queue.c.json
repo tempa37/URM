@@ -774,7 +774,7 @@
 		"-D",
 		"VER_MIN=5",
 		"-D",
-		"VER_DATE=27.12.2025",
+		"VER_DATE=12.01.2026",
 		"-D",
 		"VER_CONF=URM",
 		"-D__ALIGNOF__=__alignof__",
