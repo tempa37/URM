@@ -45,8 +45,8 @@
         <ShowTiming>1</ShowTiming>
     </CallStackStripe>
     <PlDriver>
-        <FirstRun>0</FirstRun>
         <MemConfigValue>C:\iar\ewarm-9.70.1\arm\config\debugger\ST\STM32F030K6.ddf</MemConfigValue>
+        <FirstRun>0</FirstRun>
     </PlDriver>
     <Trace1>
         <Enabled>0</Enabled>
