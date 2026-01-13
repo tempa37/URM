@@ -742,7 +742,7 @@
                 </option>
                 <option>
                     <name>IlinkKeepSymbols</name>
-                    <state></state>
+                    <state>__checksum</state>
                 </option>
                 <option>
                     <name>IlinkRawBinaryFile</name>
@@ -862,7 +862,7 @@
                 </option>
                 <option>
                     <name>DoFill</name>
-                    <state>0</state>
+                    <state>1</state>
                 </option>
                 <option>
                     <name>FillerByte</name>
@@ -870,11 +870,11 @@
                 </option>
                 <option>
                     <name>FillerStart</name>
-                    <state>0x0</state>
+                    <state> 0x08001000</state>
                 </option>
                 <option>
                     <name>FillerEnd</name>
-                    <state>0x0</state>
+                    <state>0x08007BFD</state>
                 </option>
                 <option>
                     <name>CrcSize</name>
@@ -887,7 +887,7 @@
                 </option>
                 <option>
                     <name>CrcPoly</name>
-                    <state>0x11021</state>
+                    <state>0x8005</state>
                 </option>
                 <option>
                     <name>CrcCompl</name>
@@ -897,15 +897,15 @@
                 <option>
                     <name>CrcBitOrder</name>
                     <version>0</version>
-                    <state>0</state>
+                    <state>1</state>
                 </option>
                 <option>
                     <name>CrcInitialValue</name>
-                    <state>0x0</state>
+                    <state>0xFFFF</state>
                 </option>
                 <option>
                     <name>DoCrc</name>
-                    <state>0</state>
+                    <state>1</state>
                 </option>
                 <option>
                     <name>IlinkBE8Slave</name>
@@ -945,7 +945,7 @@
                 </option>
                 <option>
                     <name>IlinkCrcUseAsInput</name>
-                    <state>1</state>
+                    <state>0</state>
                 </option>
                 <option>
                     <name>IlinkOptInline</name>
@@ -990,7 +990,7 @@
                 <option>
                     <name>CrcAlgorithm</name>
                     <version>1</version>
-                    <state>1</state>
+                    <state>3</state>
                 </option>
                 <option>
                     <name>CrcUnitSize</name>

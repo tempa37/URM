@@ -1,12 +1,14 @@
 ###############################################################################
 #
-# IAR ELF Linker V9.70.1.475/W64 for ARM                  12/Jan/2026  14:05:29
+# IAR ELF Linker V9.70.1.475/W64 for ARM                  13/Jan/2026  13:33:55
 # Copyright 2007-2025 IAR Systems AB.
 #
-#    Output file  =  C:\Users\User\Desktop\project RM\RM\EWARM\URM\Exe\URM.out
+#    Output file  =
+#        C:\Users\User\Desktop\project RM\RM\EWARM\URM\Exe\URM.out_nochecksum
 #    Map file     =  C:\Users\User\Desktop\project RM\RM\EWARM\URM\List\URM.map
 #    Command line =
-#        -f "C:\Users\User\Desktop\project RM\RM\EWARM\URM\Exe\URM.out.rsp"
+#        -f "C:\Users\User\Desktop\project
+#        RM\RM\EWARM\URM\Exe\URM.out_nochecksum.rsp"
 #        ("C:\Users\User\Desktop\project
 #        RM\RM\EWARM\URM\Obj\FreeRTOS_4809373609813369194.dir\cmsis_os.o"
 #        "C:\Users\User\Desktop\project
@@ -84,15 +86,19 @@
 #        "C:\Users\User\Desktop\project
 #        RM\RM\EWARM\URM\Obj\FreeRTOS_4809373609813369194.dir\timers.o"
 #        --no_out_extension -o "C:\Users\User\Desktop\project
-#        RM\RM\EWARM\URM\Exe\URM.out" --redirect _Printf=_PrintfFullNoMb
-#        --redirect _Scanf=_ScanfFullNoMb --map "C:\Users\User\Desktop\project
+#        RM\RM\EWARM\URM\Exe\URM.out_nochecksum" --redirect
+#        _Printf=_PrintfFullNoMb --redirect _Scanf=_ScanfFullNoMb --keep
+#        __checksum --map "C:\Users\User\Desktop\project
 #        RM\RM\EWARM\URM\List\URM.map" --config "C:\Users\User\Desktop\project
 #        RM\RM\EWARM/stm32f030x6_flash.icf" --semihosting --entry
-#        __iar_program_start --vfe --threaded_lib --text_out locale
+#        __iar_program_start --place_holder __checksum,2,.checksum,1
+#        --define_symbol __checksum_begin=0x8001000 --define_symbol
+#        __checksum_end=0x8007bfd --vfe --threaded_lib --text_out locale
 #        --cpu=Cortex-M0 --fpu=None) --diagnostics_format=sarif_stdout
 #        --dependencies=n "C:\Users\User\Desktop\project
-#        RM\RM\EWARM\URM\Exe\URM.out.iar_deps" --dynamic_output
-#        "C:\Users\User\Desktop\project RM\RM\EWARM\URM\Exe\URM.out.iar_dynout"
+#        RM\RM\EWARM\URM\Exe\URM.out_nochecksum.iar_deps" --dynamic_output
+#        "C:\Users\User\Desktop\project
+#        RM\RM\EWARM\URM\Exe\URM.out_nochecksum.iar_dynout"
 #
 ###############################################################################
 
@@ -122,6 +128,8 @@ be primarily optimized for speed.
 ***
 
 "A0":  place at address 0x800'1000 {  ro section .intvec };
+"A1":  place at end of [from 0x800'1000 to 0x800'7bff] {
+           ro section .checksum };
 "P2":  place in [from 0x800'1000 to 0x800'7bff] {  ro };
 define block CSTACK with size = 1K, alignment = 8 { };
 define block HEAP with size = 1K, alignment = 8 { };
@@ -244,6 +252,10 @@ No sections matched the following patterns:
   .rodata                const     0x800'6870                0x0  copy_init3.o [7]
                                  - 0x800'6870             0x57c0
 
+"A1":                                                        0x2
+  .checksum              const     0x800'7bfe                0x2  Place holder __checksum
+                                 - 0x800'7c00                0x2
+
 Absolute sections:                                          0xff
   .noinit                uninit   0x2000'0000               0xff  main.o [2]
                                 - 0x2000'00ff               0xff
@@ -340,7 +352,7 @@ Unused ranges:
 
          From           To    Size
          ----           --    ----
-   0x800'6870   0x800'7bff  0x1390
+   0x800'6870   0x800'7bfd  0x138e
   0x2000'00ff  0x2000'00ff     0x1
   0x2000'0f80  0x2000'0fff    0x80
 
@@ -373,8 +385,9 @@ Extra (__iar_cstart_call_ctors)
                                                               (abs)
     ------                        -------  -------  -------  -------
 command line/config:
+    Place holder __checksum                      2
     ----------------------------------------------------------------
-    Total:
+    Total:                                       2
 
 C:\Users\User\Desktop\project RM\RM\EWARM\URM\Obj\CMSIS_6603591812247902717.dir: [1]
     system_stm32f0xx.o                  2       28        4
@@ -466,7 +479,7 @@ th6M_tlf.a: [9]
     Gaps                                4
     Linker created                              41    1'024
 --------------------------------------------------------------------
-    Grand Total:                   21'904      736    3'709      255
+    Grand Total:                   21'904      738    3'709      255
 
 
 *******************************************************************************
@@ -695,6 +708,9 @@ __aeabi_uidiv            0x800'4fb5         Code  Gb  I32DivModFast.o [7]
 __aeabi_uidivmod         0x800'4fb5         Code  Gb  I32DivModFast.o [7]
 __call_ctors             0x800'6765   0x18  Code  Gb  cppinit.o [6]
 __cexit_clearlocks       0x800'66fb         Code  Gb  cexit_2.o [7]
+__checksum               0x800'7bfe    0x2  Data  Gb  Place holder __checksum
+__checksum_begin {Abs}   0x800'1000          --   Gb  <internal module>
+__checksum_end {Abs}     0x800'7bfd          --   Gb  <internal module>
 __cmain                  0x800'66c5         Code  Gb  cmain.o [7]
 __cstart_clearlocks      0x800'6870         Data  Gb  cstart_clearlocks.o [7]
 __dlib_thread_safety_init
@@ -886,7 +902,7 @@ zeroing_the_buffer       0x800'116b   0x18  Code  Gb  main.o [2]
 [9] = th6M_tlf.a
 
   21'904 bytes of readonly  code memory
-     736 bytes of readonly  data memory
+     738 bytes of readonly  data memory
    3'709 bytes of readwrite data memory (+ 255 absolute)
 
 Errors: none

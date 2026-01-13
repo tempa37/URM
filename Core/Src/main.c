@@ -832,7 +832,7 @@ int main(void)
   VectorTable_CopyToSRAM_AndRemap();
   /* USER CODE END 1 */
 
-  /* MCU Configuration--------------------------------------------------------*/
+  /* MCU Configuration------------------0--------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
