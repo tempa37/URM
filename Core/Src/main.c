@@ -80,9 +80,9 @@ uint8_t gOsBuff = 0;
 typedef struct
 {
   uint16_t baud_x100;   // 1152 -> 115200
-  uint16_t wordlen;     // 8 or 9
-  uint16_t parity;      // 0-none,1-odd,2-even
-  uint16_t stop;        // 1 or 2
+  uint16_t wordlen;     // 
+  uint16_t parity;      // 
+  uint16_t stop;        //
 } UartCfgFlash;
 /* USER CODE END PTD */
 
@@ -94,9 +94,9 @@ __no_init __root uint8_t gVecPad[0xFF];   //НЕ ТРОГАТЬ, В ДАННОЙ
 
 UartCfgFlash def_uart = {
     .baud_x100   = 1152u,
-    .wordlen = UART_WORDLENGTH_8B,
-    .stop   = UART_STOPBITS_1,
-    .parity     = UART_PARITY_NONE
+    .wordlen = UART_WORDLENGTH_9B,
+    .stop   = UART_STOPBITS_2,
+    .parity     = UART_PARITY_EVEN
 };
 
 
@@ -1500,23 +1500,34 @@ static void UartCfg_Apply(const UartCfgFlash *cfg)
   (void)HAL_UART_DeInit(&huart1);
 
   huart1.Init.BaudRate   = (uint32_t)cfg->baud_x100 * 100u;
-  huart1.Init.WordLength = (cfg->wordlen == 9u) ? UART_WORDLENGTH_9B : UART_WORDLENGTH_8B;
+  
+  
+  switch (cfg->wordlen)
+  {
+    case 0x1000: huart1.Init.WordLength = UART_WORDLENGTH_9B;  break;
+    default:  huart1.Init.WordLength = UART_WORDLENGTH_8B;  break;
+  }
 
   switch (cfg->parity)
   {
-    case 1u: huart1.Init.Parity = UART_PARITY_ODD;  break;
-    case 2u: huart1.Init.Parity = UART_PARITY_EVEN; break;
+    case 0x600: huart1.Init.Parity = UART_PARITY_ODD;  break;
+    case 0x400: huart1.Init.Parity = UART_PARITY_EVEN; break;
     default: huart1.Init.Parity = UART_PARITY_NONE; break;
   }
 
-  huart1.Init.StopBits   = (cfg->stop == 2u) ? UART_STOPBITS_2 : UART_STOPBITS_1;
+  switch (cfg->stop)
+  {
+    case 0x2000: huart1.Init.StopBits   = UART_STOPBITS_2;  break;
+    default:  huart1.Init.StopBits   = UART_STOPBITS_1;  break;
+  }
+
   huart1.Init.Mode       = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl  = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
 
-  // У тебя USART в RS485 режиме:
+
   if (HAL_RS485Ex_Init(&huart1, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
   {
     Error_Handler();
