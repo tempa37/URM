@@ -140,6 +140,18 @@ volatile uint16_t new_paket = 0;
 
 volatile uint8_t gCrcErrCnt = 0;
 #pragma section = ".intvec"   // IAR: даёт доступ к началу/концу секции
+
+
+static const uint8_t bit_map[8] = { //  Маппинг OS реле
+  (1u << 1), // i=0  -> expected bit1  (реле2)
+  (1u << 2), // i=1  -> expected bit2  (реле3)
+  (1u << 3), // i=2  -> expected bit3  (реле4)
+  (1u << 0), // i=3  -> expected bit0  (реле1)
+  (1u << 4), // i=4  -> expected bit4  (реле5)
+  (1u << 7), // i=5  -> expected bit7  (реле8)
+  (1u << 5), // i=6  -> expected bit5  (реле6)
+  (1u << 6), // i=7  -> expected bit6  (реле7)
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -1115,7 +1127,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pins : PA0 PA1 PA2 PA11 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_11;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB3 PB4 */
@@ -1547,7 +1559,7 @@ void StartDefaultTask(void const * argument)
     while (i < RELE_NUM) {
       cRx = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5);
       if (cRx == GPIO_PIN_RESET) {
-        cOs |= (1 << i);
+        cOs |= bit_map[i];
       }
       ++i;
       if (i < RELE_NUM) {
@@ -1557,7 +1569,11 @@ void StartDefaultTask(void const * argument)
         break;
       }
     }
+    
+    
     gOsBuff = cOs;
+    
+    
     if (global_error != 0) {
       cIsError = true;
       CheckTumblerSetting();
@@ -1615,13 +1631,23 @@ void StartTask02(void const * argument)
       ResetOutput(); //����� ����
       gReset = false;
     }
+    
+    /*
     if (!gCheckingTumbler) {
       global_error = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11);
       if (global_error != 0) {
         ++gErrorCount;
       }
     }
+    */
 
+    global_error = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11);
+    
+      if (global_error != 0) {
+        ++gErrorCount;
+      }
+    
+    
     if ((cTickCount - cLastCheckTime) >= 3000) {
       cLastCheckTime = cTickCount;
       //CheckTumblerSetting();
