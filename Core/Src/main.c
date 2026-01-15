@@ -821,6 +821,7 @@ static void ApplyUartSettingsBeforeSignal(void)
   SwitchToReceive();
 }
 
+
 void send_uart_signal_once(void) {
     static uint8_t has_run = 0;      // флаг, инициализирован нулём только при первом заходе
     if (!has_run) {                  // если ещё не вызывали
