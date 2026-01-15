@@ -68,7 +68,7 @@ uint8_t transmit_buf[buf_size_tx] = {0};
 uint8_t state = 0;
 uint8_t buf_of_control = 0;
 uint8_t a,b,state11 = 0xff, global_error = 0x00;
-extern bool FLAG_OK = true;
+bool FLAG_OK = true;
 uint16_t gID = 0;
 uint16_t temp_gID = 0;
 uint32_t cntr = 0;
@@ -282,7 +282,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 void RDO_command_1(uint8_t command_num){
     uint16_t checksum = 0;
     checksum = mbcrc(receive_buf, 6);                                           //make CRC data
-    if(receive_buf[6] == (uint8_t)((checksum >> 8) & 0xFF) || 
+    if(receive_buf[6] == (uint8_t)((checksum >> 8) & 0xFF) && 
        receive_buf[7] == (uint8_t)(checksum & 0xFF)){
     reading_DO();
     }
@@ -308,7 +308,7 @@ void WMDO_command_15(uint8_t command_num)
     }
     if (receive_buf[6] == 0x02){
     checksum = mbcrc(receive_buf, 9);                                          //make CRC data
-    if(receive_buf[9] == (uint8_t)((checksum >> 8) & 0xFF) || 
+    if(receive_buf[9] == (uint8_t)((checksum >> 8) & 0xFF)  &&
        receive_buf[10] == (uint8_t)(checksum & 0xFF)){
     double_DO();
     }
@@ -345,15 +345,15 @@ void ERROR_checksum_handler()
 void ERROR_handler(uint8_t command_num)
 {
     uint16_t checksum = 0;
-    uint8_t transmit_buf[5] = {0};
+    uint8_t transmit_buf2[5] = {0};
     
-    transmit_buf[0] = receive_buf[0];
-    transmit_buf[1] = receive_buf[1] + 0x80;
-    transmit_buf[2] = command_num;                                              //The received function code cannot be processed.
-    checksum = mbcrc(transmit_buf, 3);                                          //make CRC data
-    transmit_buf[3] = (uint8_t) ((checksum >> 8) & 0xFF);                       //write CRC Hi bit
-    transmit_buf[4] = (uint8_t) (checksum & 0xFF);                              //write CRC Lo bit
-    HAL_UART_Transmit(&huart1, transmit_buf,  5, 10);
+    transmit_buf2[0] = receive_buf[0];
+    transmit_buf2[1] = receive_buf[1] + 0x80;
+    transmit_buf2[2] = command_num;                                              //The received function code cannot be processed.
+    checksum = mbcrc(transmit_buf2, 3);                                          //make CRC data
+    transmit_buf2[3] = (uint8_t) ((checksum >> 8) & 0xFF);                       //write CRC Hi bit
+    transmit_buf2[4] = (uint8_t) (checksum & 0xFF);                              //write CRC Lo bit
+    HAL_UART_Transmit(&huart1, transmit_buf2,  5, 10);
     
     SwitchToReceive();
 }
@@ -428,8 +428,8 @@ void reading_DO()
       }
         if (receive_buf[5] >= 0x09)  
       {
-        transmit_buf[19] = (uint8_t)(0x0000 >> 8);   
-        transmit_buf[20] = (uint8_t)(0x0000 & 0xFF); // Lo
+        transmit_buf[19] = 0;   
+        transmit_buf[20] = 0; // Lo
         cCrcIdx = 21;
       }
         
@@ -466,8 +466,8 @@ void func_06(void)
         return;
     }
 
-    uint16_t regAddr  = (uint16_t)((receive_buf[2] << 8) | receive_buf[3]);
-    uint16_t regValue = (uint16_t)((receive_buf[4] << 8) | receive_buf[5]);
+    uint16_t regAddr  = (uint16_t)(((uint16_t)receive_buf[2] << 8) | (uint16_t)receive_buf[3]);
+    uint16_t regValue = (uint16_t)(((uint16_t)receive_buf[4] << 8) | (uint16_t)receive_buf[5]);
 
     switch (regAddr)
       {
@@ -633,8 +633,7 @@ void single_DO()
   HAL_UART_Transmit(&huart1, transmit_buf,  8, 10);
   
   SwitchToReceive();
-//  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
-//  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx,  DMA_IT_HT); 
+
 }
 
 
@@ -1316,7 +1315,7 @@ HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
   // перезаписываем только первые 100 байт страницы
   if ((off + 2u) > FLASH_BACKUP_LEN) return HAL_ERROR;
 
-  uint8_t buf[FLASH_BACKUP_LEN];
+  uint8_t buf[FLASH_BACKUP_LEN] = {0};
   memcpy(buf, (const void*)page_start, FLASH_BACKUP_LEN);
 
   // Записали новое значение в копию первых 100 байт
@@ -1340,7 +1339,7 @@ HAL_StatusTypeDef Flash_WriteU16_Preserve100(uint32_t addr, uint16_t value)
   }
 
   // Восстановить первые 100 байт 
-  for (uint32_t i = 0; i < FLASH_BACKUP_LEN; i += 2u) {
+  for (uint32_t i = 0; (i + 1u) < FLASH_BACKUP_LEN; i += 2u) {
     uint16_t hw = (uint16_t)(buf[i] | ((uint16_t)buf[i + 1u] << 8));
     st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, page_start + i, hw); 
     if (st != HAL_OK) break;
@@ -1464,7 +1463,7 @@ static void UartCfg_LoadFromFlash(UartCfgFlash *cfg)
   if(gID == 0x00)
   {
     (void)Flash_ReadU16(ID_MODBUS,   &gID);
-    if(gID == 0xFF)
+    if((gID == 0xFF) || (gID == 0))
     {
       gID = 0x01;
     }
@@ -1617,6 +1616,7 @@ void StartDefaultTask(void const * argument)
 
 static inline uint32_t modbus_t35_us(uint32_t baud)
 {
+    if (baud == 0u) return 0u;   
     if (baud > 19200u) return 1750u;                 
     return (38500000u + baud - 1u) / baud;          
 }
