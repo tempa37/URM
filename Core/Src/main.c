@@ -498,6 +498,11 @@ void func_06(void)
               break;
 
           case 0x07:
+              if ((regValue < 1u) || (regValue > 247u))
+              {
+                  ERROR_handler(ILLEGAL_DATA_VALUE);
+                  return;
+              }
               temp_gID = regValue;
               break;
 
@@ -1463,7 +1468,7 @@ static void UartCfg_LoadFromFlash(UartCfgFlash *cfg)
   if(gID == 0x00)
   {
     (void)Flash_ReadU16(ID_MODBUS,   &gID);
-    if((gID == 0xFF) || (gID == 0))
+    if ((gID < 1u) || (gID > 247u))
     {
       gID = 0x01;
     }
