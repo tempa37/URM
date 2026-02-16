@@ -64,7 +64,7 @@ osThreadId defaultTaskHandle;
 osThreadId myTask02Handle;
 /* USER CODE BEGIN PV */
 uint8_t uart_rx_dma_buf[buf_size_rx] = {0}; // Рабочий DMA-буфер: заполняется аппаратно в прерывании UART
-uint8_t receive_buf[buf_size_rx] = {0};     // Копия принятого кадра для безопасного разбора в основном цикле
+uint8_t receive_buf[buf_size_rx] = {0};     // Копия принятого кадра для разбора в основном цикле
 uint8_t transmit_buf[buf_size_tx] = {0};
 uint8_t state = 0;
 uint8_t buf_of_control = 0;
@@ -280,7 +280,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     uint16_t frame_size = (Size <= buf_size_rx) ? Size : buf_size_rx;
 
     // Фиксируем кадр только если основной цикл уже обработал предыдущий.
-    // Это исключает гонку данных между DMA-прерыванием и парсером Modbus.
     if (new_paket == 0u)
     {
       // 1) Копируем полезную длину принятого кадра из DMA-буфера в буфер разбора.
@@ -298,7 +297,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     }
     else
     {
-      // Основной цикл еще занят прошлым кадром: считаем потери для диагностики.
       ++gRxFrameDropCnt;
     }
 
@@ -352,7 +350,7 @@ void WMDO_command_15(uint8_t command_num)
 //When a checksum error occurs, the slave device is silent in response
 void ERROR_checksum_handler()
 {
-  // при CRC ошибке slave молчит; но если ошибок много — перезапускаем приём
+  // при CRC ошибке slave молчит
   if (++gCrcErrCnt >= 10u)
   {
     gCrcErrCnt = 0u;
@@ -362,9 +360,6 @@ void ERROR_checksum_handler()
 
     // полный рестарт UART+DMA+флагов и повторный запуск ReceiveToIdle
     UART1_FullRestartRx();
-
-    // UART1_FullRestartRx() уже делает memset(receive_buf,0) и стартует RX,
-    // поэтому тут дополнительно SwitchToReceive() обычно не нужен
   }
   else
   {
@@ -817,7 +812,7 @@ static void ApplyUartSettingsBeforeSignal(void)
   if (huart1.hdmatx) { (void)HAL_DMA_Abort(huart1.hdmatx); }
 
   // 2) Дождаться окончания передачи (на всякий случай)
-  // Желательно с таймаутом, чтобы не зависнуть навсегда.
+
   {
     uint32_t t0 = HAL_GetTick();
     while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET)
@@ -845,8 +840,7 @@ static void ApplyUartSettingsBeforeSignal(void)
   huart1.Init.OneBitSampling  = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
 
-  // ВАЖНО: если USART реально используется в RS485 режиме, поднимать нужно им же,
-  // иначе может не подняться DE/настройки half-duplex/RS485-логика как в рабочей функции.
+
   if (HAL_RS485Ex_Init(&huart1, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
   {
     Error_Handler();
