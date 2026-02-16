@@ -63,7 +63,8 @@ DMA_HandleTypeDef hdma_usart1_tx;
 osThreadId defaultTaskHandle;
 osThreadId myTask02Handle;
 /* USER CODE BEGIN PV */
-uint8_t receive_buf[buf_size_rx] = {0};
+uint8_t uart_rx_dma_buf[buf_size_rx] = {0}; // Рабочий DMA-буфер: заполняется аппаратно в прерывании UART
+uint8_t receive_buf[buf_size_rx] = {0};     // Копия принятого кадра для безопасного разбора в основном цикле
 uint8_t transmit_buf[buf_size_tx] = {0};
 uint8_t state = 0;
 uint8_t buf_of_control = 0;
@@ -137,6 +138,8 @@ uint16_t password = 0;
 
 volatile uint16_t modbus_timeout = 0;
 volatile uint16_t new_paket = 0;
+volatile uint16_t gRxFrameSize = 0;         // Длина последнего принятого кадра (в байтах)
+volatile uint32_t gRxFrameDropCnt = 0;      // Счетчик кадров, отброшенных при занятом разборе
 
 volatile uint8_t gCrcErrCnt = 0;
 #pragma section = ".intvec"   // IAR: даёт доступ к началу/концу секции
@@ -245,7 +248,7 @@ __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
 __HAL_UART_CLEAR_OREFLAG(&huart1);
 __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
 __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
-HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
+HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart_rx_dma_buf, buf_size_rx);
 __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 
 }
@@ -260,7 +263,9 @@ uint8_t ID_parsing(void)
 
 void zeroing_the_buffer(void)
 {
-  memset(receive_buf, 0, 11);
+  memset(uart_rx_dma_buf, 0, sizeof(uart_rx_dma_buf));
+  memset(receive_buf, 0, sizeof(receive_buf));
+  gRxFrameSize = 0u;
   SwitchToReceive();
 }
 
@@ -271,8 +276,34 @@ extern TickType_t gLastTickCount;
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
   if  (huart -> Instance  ==  USART1)
-  { 
-    new_paket = 1;
+  {
+    uint16_t frame_size = (Size <= buf_size_rx) ? Size : buf_size_rx;
+
+    // Фиксируем кадр только если основной цикл уже обработал предыдущий.
+    // Это исключает гонку данных между DMA-прерыванием и парсером Modbus.
+    if (new_paket == 0u)
+    {
+      // 1) Копируем полезную длину принятого кадра из DMA-буфера в буфер разбора.
+      memcpy(receive_buf, uart_rx_dma_buf, frame_size);
+
+      // 2) Затираем хвост, чтобы при разборе не остались байты от старых кадров.
+      if (frame_size < buf_size_rx)
+      {
+        memset(&receive_buf[frame_size], 0, (size_t)(buf_size_rx - frame_size));
+      }
+
+      // 3) Публикуем длину и флаг "кадр готов" для основного потока.
+      gRxFrameSize = frame_size;
+      new_paket = 1u;
+    }
+    else
+    {
+      // Основной цикл еще занят прошлым кадром: считаем потери для диагностики.
+      ++gRxFrameDropCnt;
+    }
+
+    // 4) Независимо от состояния основного цикла сразу перезапускаем прием.
+    SwitchToReceive();
   }
 }
 
@@ -1207,15 +1238,17 @@ void UART1_FullRestartRx(void)
   CLEAR_BIT(huart1.Instance->CR3, USART_CR3_DDRE);
 #endif
 
-  // 6) Очистить буфер и снова запустить ReceiveToIdle DMA
+  // 6) Очистить оба буфера (DMA + буфер разбора) и снова запустить ReceiveToIdle DMA
+  memset(uart_rx_dma_buf, 0, sizeof(uart_rx_dma_buf));
   memset(receive_buf, 0, sizeof(receive_buf));
+  gRxFrameSize = 0u;
 
   __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_IDLEF);
   __HAL_UART_CLEAR_OREFLAG(&huart1);
   __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_FEF);
   __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
 
-  (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, receive_buf, buf_size_rx);
+  (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart_rx_dma_buf, buf_size_rx);
   __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 
   // 7) Вернуть IRQ обратно
@@ -1677,7 +1710,16 @@ void StartTask02(void const * argument)
     
     if(new_paket)
     {
-      
+       // Снимок длины кадра из прерывания; защищает от чтения незавершенных данных.
+       uint16_t frame_size = gRxFrameSize;
+
+       if(frame_size == 0u)
+       {
+         new_paket = 0u;
+         SwitchToReceive();
+         continue;
+       }
+
        if(receive_buf[0] == 0x41)  //Автоподключение
        {
          usart_signal();
@@ -1699,14 +1741,29 @@ void StartTask02(void const * argument)
             if(receive_buf[0] == gID){
         switch (receive_buf[1]){
              case 0x03:                                                         //read Digital output
+               if (frame_size < 8u)
+               {
+                 ERROR_checksum_handler();
+                 break;
+               }
                gLastTickCount = xTaskGetTickCount();
               RDO_command_1(receive_buf[1]);                            
               break;
              case 0x0F:                                                         //write Multiple Digital outputs
+               if (frame_size < 10u)
+               {
+                 ERROR_checksum_handler();
+                 break;
+               }
                gLastTickCount = xTaskGetTickCount();
               WMDO_command_15(receive_buf[1]);                            
               break;
              case 0x06:
+               if (frame_size < 8u)
+               {
+                 ERROR_checksum_handler();
+                 break;
+               }
                 func_06();
           
                break;
@@ -1721,8 +1778,9 @@ void StartTask02(void const * argument)
          }       
        }
       else{ 
-        ERROR_checksum_handler();
+        SwitchToReceive();
       }
+     gRxFrameSize = 0u;
      new_paket = 0;
     }
   }
