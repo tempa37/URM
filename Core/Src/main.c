@@ -193,6 +193,7 @@ void usart_signal(void);                             //Отправляет от
 uint8_t ID_parsing(void); //читает UART ID с перемычек
 void func_06(void);   //запись регистра времени ответа modbus
 void OS_update(void); //помечает флагом что началось обновление
+bool IsFrameCrcValid(uint16_t frame_size); //проверяет CRC кадра по текущей длине
 void SetOsAddr(int8_t iAddr); //считывает обратную связь
 void CheckTumblerSetting(void); //заполняет gTumblerBuff (состояние тумблеров)
 
@@ -472,6 +473,18 @@ void reading_DO()
     HAL_UART_Transmit(&huart1, transmit_buf,  cCrcIdx + 2, 10);
     
     SwitchToReceive(); 
+}
+
+bool IsFrameCrcValid(uint16_t frame_size)
+{
+    if (frame_size < 4u)
+    {
+        return false;
+    }
+
+    const uint16_t crc = mbcrc(receive_buf, frame_size - 2u);
+    return (receive_buf[frame_size - 2u] == (uint8_t)((crc >> 8) & 0xFFu)) &&
+           (receive_buf[frame_size - 1u] == (uint8_t)(crc & 0xFFu));
 }
 
 /*
@@ -1714,7 +1727,7 @@ void StartTask02(void const * argument)
          continue;
        }
 
-       if(receive_buf[0] == 0x41)  //Автоподключение
+       if(receive_buf[0] == 0x42)  //Автоподключение
        {
          usart_signal();
        }
@@ -1763,6 +1776,11 @@ void StartTask02(void const * argument)
                break;
                
              case 0x2B:
+               if (!IsFrameCrcValid(frame_size))
+               {
+                 ERROR_checksum_handler();
+                 break;
+               }
                   OS_update();
                break;
              default:                                                           //errors handler
