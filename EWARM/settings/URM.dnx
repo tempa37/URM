@@ -23,8 +23,8 @@
         <Checksum>2713961973</Checksum>
     </DebugChecksum>
     <Exceptions>
-        <StopOnThrow>_ 0</StopOnThrow>
         <StopOnUncaught>_ 0</StopOnUncaught>
+        <StopOnThrow>_ 0</StopOnThrow>
     </Exceptions>
     <CallStack>
         <ShowArgs>0</ShowArgs>
@@ -45,8 +45,8 @@
         <ShowTiming>1</ShowTiming>
     </CallStackStripe>
     <PlDriver>
-        <MemConfigValue>C:\iar\ewarm-9.70.1\arm\config\debugger\ST\STM32F030K6.ddf</MemConfigValue>
         <FirstRun>0</FirstRun>
+        <MemConfigValue>C:\iar\ewarm-9.70.1\arm\config\debugger\ST\STM32F030K6.ddf</MemConfigValue>
     </PlDriver>
     <Trace1>
         <Enabled>0</Enabled>

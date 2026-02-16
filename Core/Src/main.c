@@ -133,7 +133,6 @@ bool gCheckingTumbler = false;
 
 #define PASS                   0x3131  //12593 in dec
 uint16_t password = 0;
-
 #define FLASH_BACKUP_LEN       100u //при перезаписи флага копируем в буффер первые 100 байт
 
 volatile uint16_t modbus_timeout = 0;
@@ -462,10 +461,7 @@ void reading_DO()
         
 
     
-    
-    
-    
-    
+
     checksum = mbcrc(transmit_buf, cCrcIdx);                    //make CRC data
     transmit_buf[cCrcIdx] = (uint8_t) ((checksum >> 8) & 0xFF); //write CRC Hi byte
     transmit_buf[cCrcIdx + 1] = (uint8_t) (checksum & 0xFF);    //write CRC Lo byte
@@ -960,7 +956,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
+     HAL_Delay(10);
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
