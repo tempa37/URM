@@ -43,6 +43,7 @@
 #define I2C_DEV_ADDR            0x40
 
 #define RELE_NUM            8
+#define OS_TEST_SNAPSHOT_MAX 16
 
 /* USER CODE END PD */
 
@@ -76,6 +77,10 @@ uint32_t cntr = 0;
 uint8_t gInp = 0;
 uint16_t gTumblerBuff = 0;
 uint8_t gOsBuff = 0;
+uint16_t gReg0Snapshots[OS_TEST_SNAPSHOT_MAX] = {0};
+uint8_t gReg0SnapshotCount = 0;
+uint8_t gReg0SnapshotHead = 0;
+uint8_t gOsMismatchMask = 0;
 
 /* Конфигурация UART */
 typedef struct
@@ -251,6 +256,26 @@ __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_NEF);
 HAL_UARTEx_ReceiveToIdle_DMA(&huart1, uart_rx_dma_buf, buf_size_rx);
 __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
 
+}
+
+static void CaptureReg0Snapshot(uint8_t state_value)
+{
+  if (gCheckingTumbler) {
+    return;
+  }
+  if (state_value == 0xff) {
+    return;
+  }
+
+  osDelay(2);
+
+  uint16_t snapshot = ((uint16_t)gOsBuff << 8) | (uint16_t)global_error;
+  gReg0Snapshots[gReg0SnapshotHead] = snapshot;
+  if (gReg0SnapshotCount < OS_TEST_SNAPSHOT_MAX) {
+    ++gReg0SnapshotCount;
+  }
+  gReg0SnapshotHead = (uint8_t)((gReg0SnapshotHead + 1u) % OS_TEST_SNAPSHOT_MAX);
+  gOsMismatchMask |= (uint8_t)(gOsBuff ^ gInp);
 }
 
 uint8_t ID_parsing(void)
@@ -454,8 +479,8 @@ void reading_DO()
       }
         if (receive_buf[5] >= 0x09)  
       {
-        transmit_buf[19] = 0;   
-        transmit_buf[20] = 0; // Lo
+        transmit_buf[19] = gOsMismatchMask;   
+        transmit_buf[20] = gReg0SnapshotCount; // Lo
         cCrcIdx = 21;
       }
         
@@ -660,6 +685,8 @@ void single_DO()
           HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
           }
   }
+
+  CaptureReg0Snapshot(0x00);
   
   transmit_buf[0] = gID;
   transmit_buf[1] = receive_buf[1];
@@ -758,6 +785,8 @@ void double_DO()
           HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
           }
   }
+
+  CaptureReg0Snapshot(state);
   
   transmit_buf[0] = gID;
   transmit_buf[1] = receive_buf[1];
